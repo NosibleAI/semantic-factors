@@ -177,8 +177,8 @@ def paired_polarity_from_scores(
         raise ValueError(f"tanh_scale must be positive, got {tanh_scale}")
     if not pairs:
         raise ValueError("at least one pole pair is required")
-    best_gap = np.zeros(shape=values.shape[0], dtype=np.float32)
-    best_score = np.full(shape=values.shape[0], fill_value=-np.inf, dtype=np.float32)
+    best_gap: np.ndarray = np.zeros(shape=values.shape[0], dtype=np.float32)
+    best_score: np.ndarray = np.full(shape=values.shape[0], fill_value=-np.inf, dtype=np.float32)
     for high_slice, low_slice in pairs:
         high = values[:, high_slice]
         low = values[:, low_slice]
