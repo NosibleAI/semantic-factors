@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+dist-audit-*/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+examples/output/
+*.png
+*.csv
+*.parquet

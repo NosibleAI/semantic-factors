@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semantic-factors"
+dynamic = ["version"]
+description = "Build quantitative factors from NOSIBLE World events by describing them in plain English."
+readme = "README.md"
+requires-python = ">=3.10,<4"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "NOSIBLE", email = "stuart@nosible.com"},
+]
+keywords = ["quant", "factors", "news", "embeddings", "nosible", "alternative-data"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+# Unlike the packages that live inside NOSIBLE's own conda environment, this one is
+# installed into a customer's environment and therefore owns its dependency set.
+dependencies = [
+    # NumPy 2.5's type stubs require Python 3.12 syntax, while this package supports 3.10.
+    "numpy>=1.24,<2.5",
+    "polars>=1.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+test = ["pytest>=8.0"]
+dev = [
+    "matplotlib>=3.7",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "types-requests>=2.31",
+]
+
+[project.urls]
+Homepage = "https://www.nosible.com"
+Documentation = "https://docs.nosible.com"
+Source = "https://github.com/NosibleAI/semantic-factors"
+
+[project.scripts]
+semantic-factors = "semantic_factors.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "semantic_factors.version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+semantic_factors = ["py.typed", "fonts/*.ttf", "fonts/OFL.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# No UP rules. The NOSIBLE Python rules require explicit typing generics (Tuple, Optional,
+# Dict) rather than the PEP 585/604 builtins, and pyupgrade would rewrite every signature.
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Reading a property is the whole point of a test that asserts the read raises.
+"tests/*" = ["B018"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["semantic_factors"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
