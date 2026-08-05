@@ -1,23 +1,50 @@
 # semantic-factors
 
-## Turn web text into semantic stock betas
+**Turn web text into semantic stock betas.**
 
-`semantic-factors` is an open-source Python library for turning NOSIBLE World event text into
-transparent daily semantic factors. Quant portfolio managers and researchers write the definition,
-inspect the output, and rerun it when the research question changes.
+`semantic-factors` is an open-source Python library that turns NOSIBLE World event text into
+transparent daily semantic factors. You write the definition in plain sentences, inspect every
+step of the output, and rerun it when the research question changes.
+
+## Why this exists
+
+In 1973, Robert Merton argued that asset prices move on news about state variables, the shifting
+conditions of the world that investors actually price. He called it the
+[ICAPM](https://www.jstor.org/stable/1913811). The problem? Language modelling was nowhere.
+Nobody could measure the state.
+
+So quantitative finance took a different path: we built risk models from prices, not texts. The
+proxies were brilliant, and they carried the field for half a century. But
+[400+ published factors](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3341728) later,
+returns decay [58% after publication](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2156623)
+and [65% of anomalies fail to replicate](https://academic.oup.com/rfs/article/33/5/2019/5236964).
+The exhaustion is not intellectual. It is informational: several hundred rearrangements of the
+same prices and filings.
+
+We're not in 1973 anymore. Word2Vec, BERT, LLMs: language modelling is here, and the state of the
+world is finally measurable. The evidence has arrived with it. Factors estimated from news text
+alone price the cross-section of stocks better than the standard factor models out of sample
+([Bybee, Kelly and Su, 2023](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3895277)). We can
+build the future that should have been.
+
+The future that could have been is now pip-installable:
+
+```bash
+python -m pip install "semantic-factors[plot]"
+```
 
 ## See a real semantic factor
 
 ### Inflation attention
 
-This factor turns US coverage of prices, costs, and inflation expectations into a dated signal. The
-chart is a real package-rendered output, not mock data.
+This factor turns US coverage of prices, costs, and inflation expectations into a dated signal.
+The chart is a real package-rendered output, not mock data.
 
 <p align="center">
   <img src="docs/images/inflation-attention.png" alt="Inflation attention semantic factor" width="960">
 </p>
 
-<p align="center"><strong>Inflation attention</strong> - US coverage of prices, costs, and inflation expectations</p>
+<p align="center"><strong>Inflation attention</strong> · US coverage of prices, costs, and inflation expectations</p>
 
 The workflow is simple:
 
@@ -28,37 +55,39 @@ The workflow is simple:
 
 The important part is visible. The anchors, poles, filters, threshold, weighting, dates, and
 arithmetic are all ordinary Python values. There is no catalogue lookup required to define a new
-factor.
+factor. If you can describe a risk in sentences, you can measure it.
 
 ## Who it is for
 
 This is for quant portfolio managers and researchers who need differentiated signals and want to
-see exactly how a signal was made before putting it into a risk model. It is useful when a
-benchmark arrives late, when a risk concept is too specific for a standard data vendor, or when a
-team wants to test a new definition without waiting for a new data product.
+see exactly how a signal was made before putting it into a risk model. It earns its keep when a
+benchmark index arrives late, when a risk concept is too specific for a standard data vendor, or
+when a team wants to test a new definition this afternoon instead of waiting for a new data
+product.
 
 ## Before you start
 
 Every live build needs two credentials:
 
 - `NOSIBLE_API_KEY` gives the package access to NOSIBLE World event coverage and denominators.
+  Come get your World API key at [nosible.com](https://www.nosible.com/semantic-factors).
 - `OPENROUTER_API_KEY` embeds your anchors and poles through an OpenAI-compatible endpoint.
 
 The package retrieves through the grouped `POST /api/search` World contract and computes factor
-mathematics locally. It does not use an `/api/factors` scoring route.
+mathematics locally. It does not use an `/api/factors` scoring route. Your definitions stay in
+your code; the event text stays in World.
 
 ```bash
-python -m pip install "semantic-factors[plot]"
-
 export NOSIBLE_API_KEY=nos_sk_...
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
 Python 3.10 or newer is required.
 
-The complete set of 30 worked factors, their definitions, charts, CSV files, and research sources
-is available at [semantic-factors on NOSIBLE](https://www.nosible.com/semantic-factors). The
-repository examples are the definitions you can copy and edit:
+The complete set of 30 worked factors, with definitions, charts, CSV files, and the research
+lineage behind each one, lives at
+[semantic-factors on NOSIBLE](https://www.nosible.com/semantic-factors). The repository examples
+are definitions you can copy and edit:
 
 - [Geopolitical risk](examples/geopolitical_risk.py)
 - [Trade policy uncertainty](examples/trade_policy_uncertainty.py)
@@ -70,8 +99,9 @@ use different source coverage, definitions, embedding geometry, filters, and agg
 
 ## Build a factor
 
-The definition is the research choice. Anchors describe what belongs in the factor. Each polarity
-pair keeps one topic fixed while expressing a higher-risk and lower-risk state.
+The definition is the research choice, so the definition is code you can read. Anchors describe
+what belongs in the factor. Each polarity pair keeps one topic fixed while expressing a
+higher-risk and a lower-risk state of it.
 
 ```python
 import os
@@ -128,6 +158,10 @@ factor.plot(
 )
 ```
 
+Notice what just happened. In 1973 this was the unmeasurable part: "the state of the world" was a
+theoretical object with no instrument attached. Here it is twelve sentences and two polarity
+pairs, and you can edit every word.
+
 The full definitions are deliberately longer than this README snippet. Open the source files to
 see every sentence, pair, episode, and output setting. The package is permissionless at the point
 where it matters: edit the text, change the scope or threshold, and run the same code again.
@@ -144,7 +178,8 @@ Use sentences instead of a hidden label:
 - **The cosine floor** decides how close an event must be to the definition before it counts.
 
 Use several varied anchors for a broad construct. Use matched polarity pairs for each distinct
-topic. Clear sentences make the research object easier to review and improve.
+topic. Clear sentences make the research object easier to review, easier to criticise, and easier
+to improve. That is the point.
 
 ### 2. Retrieve and score
 
@@ -185,7 +220,9 @@ count, raw contribution, denominator volume, stabilisation baseline, and share.
 
 One semantic factor gives you a dated measure of a common risk. Align it with stock returns,
 control for the market, and estimate how each stock responds when the factor moves. The result is
-a stock-specific loading you can inspect before using it in a risk model.
+a stock-specific loading you can inspect before using it in a risk model. This is the ICAPM's
+missing half finally connected: a named state variable on one side, a measured exposure on the
+other.
 
 ```python
 factor.compute(
@@ -225,7 +262,9 @@ work that already succeeded.
 
 The output is reproducible for a fixed World snapshot, embedding model, definition, threshold,
 filters, weighting scheme, and package version. Different data snapshots or definitions can
-produce different series. That is expected and is why the definition is shown alongside the data.
+produce different series. That is expected, and it is why the definition is shown alongside the
+data. A factor whose construction you cannot read is a factor you cannot trust; this one you can
+read top to bottom.
 
 ## Command line
 
@@ -256,5 +295,8 @@ mypy src
 python -m build
 ```
 
+## Where to start
+
 Start with the worked examples, then replace the sentences with the question your book actually
-needs answered.
+needs answered. That last step is the whole product: for fifty years the state of the world was
+the variable nobody could measure. Now it is an argument to a Python function.
