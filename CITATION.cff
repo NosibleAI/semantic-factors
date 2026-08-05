@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use semantic-factors in research, please cite the software."
+title: "semantic-factors"
+abstract: "Build auditable quantitative factors from NOSIBLE World events using plain-English definitions."
+type: software
+authors:
+  - name: "NOSIBLE"
+version: 0.1.0
+date-released: 2026-08-05
+license: Apache-2.0
+repository-code: "https://github.com/NosibleAI/semantic-factors"
+url: "https://www.nosible.com/semantic-factors"
+keywords:
+  - quantitative finance
+  - semantic factors
+  - alternative data
+  - natural language processing

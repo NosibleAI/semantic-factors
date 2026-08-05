@@ -9,6 +9,13 @@ dist-audit-*/
 .mypy_cache/
 .venv/
 venv/
+.coverage
+coverage.xml
+htmlcov/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
 examples/output/
 *.png
 *.csv

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/NosibleAI/semantic-factors/security/advisories/new
+    about: Report vulnerabilities privately; do not open a public issue.
+  - name: NOSIBLE World access and accounts
+    url: https://www.nosible.com
+    about: Get help with API access, account, and commercial questions.

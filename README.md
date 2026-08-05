@@ -1,5 +1,10 @@
 # semantic-factors
 
+[![CI](https://github.com/NosibleAI/semantic-factors/actions/workflows/semantic-factors.yml/badge.svg?branch=main)](https://github.com/NosibleAI/semantic-factors/actions/workflows/semantic-factors.yml)
+[![PyPI](https://img.shields.io/pypi/v/semantic-factors.svg?logo=python)](https://pypi.org/project/semantic-factors/)
+[![Python versions](https://img.shields.io/pypi/pyversions/semantic-factors.svg)](https://pypi.org/project/semantic-factors/)
+[![License](https://img.shields.io/github/license/NosibleAI/semantic-factors.svg)](LICENSE)
+
 **Turn web text into semantic stock betas.**
 
 `semantic-factors` is an open-source Python library that turns NOSIBLE World event text into
@@ -300,3 +305,12 @@ python -m build
 Start with the worked examples, then replace the sentences with the question your book actually
 needs answered. That last step is the whole product: for fifty years the state of the world was
 the variable nobody could measure. Now it is an argument to a Python function.
+
+## Contributing and security
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. Please report suspected
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+`semantic-factors` is licensed under the [Apache License 2.0](LICENSE). The bundled fonts retain
+their SIL Open Font License; attribution details are in [NOTICE](NOTICE).

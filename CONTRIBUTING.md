@@ -6,7 +6,7 @@ backend changes belong in the World service.
 
 ## Local setup
 
-Use a supported Python version (3.10–3.13) and install the development dependencies into a
+Use a supported Python version (3.10-3.14) and install the development dependencies into a
 virtual environment:
 
 ```bash
@@ -23,6 +23,9 @@ python -m ruff check .
 python -m mypy src
 python -m build
 python -m twine check dist/*
+semantic-factors --version
+semantic-factors fields --search materiality
+semantic-factors schemes
 ```
 
 Tests must remain offline and must not contain customer data, World responses, API keys, cache
@@ -35,3 +38,6 @@ Keep changes focused, explain user-visible behavior in the pull request descript
 update regression tests for behavior changes. Do not change the grouped World API contract from
 this repository without coordinating with the backend owner. Release and publication changes
 require maintainer approval.
+
+By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security
+reports, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
