@@ -196,6 +196,26 @@ def test_residualisation_is_refused_instead_of_silently_skipped() -> None:
     assert "silently" in str(error.value)
 
 
+def test_embedding_base_url_is_forwarded_to_the_provider(monkeypatch) -> None:
+    """Require OpenRouter and other compatible endpoints to reach the embedder."""
+    captured = {}
+
+    def fake_embed_texts(**kwargs):
+        captured.update(kwargs)
+        return np.ones(shape=(len(kwargs["texts"]), 3_072), dtype=np.float32)
+
+    monkeypatch.setattr(factor_module.embeddings, "embed_texts", fake_embed_texts)
+    subject = SemanticFactor(anchors=ANCHORS)
+
+    subject.prepare_vectors(
+        embed_api_key="temporary-test-key",
+        embed_base_url="https://openrouter.example/v1",
+        cache_dir=None,
+    )
+
+    assert captured["base_url"] == "https://openrouter.example/v1"
+
+
 def test_poles_can_be_removed_from_the_numerator_without_changing_diagnostics() -> None:
     """Require polarity_weighted=False to preserve the direction-blind base weight."""
     records = [

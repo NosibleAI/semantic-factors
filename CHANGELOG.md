@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-08-05
+
+- Add the documented `embed_base_url` argument to `compute()`, `calibrate()`, and CLI specs so
+  OpenRouter and other OpenAI-compatible embedding providers work end to end.
+
 ## 0.1.0 — 2026-08-05
 
 First release.

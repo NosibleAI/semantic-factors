@@ -154,6 +154,7 @@ class SemanticFactor:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         embed_api_key: Optional[str] = None,
+        embed_base_url: str = embeddings.EMBED_BASE_URL,
         cache_dir: Optional[str] = None,
         top_events: int = 5,
         per_date_limit: int = world_client.DEFAULT_PER_DATE_LIMIT
@@ -177,6 +178,8 @@ class SemanticFactor:
         :param api_key: NOSIBLE World API key with archive access.
         :param base_url: World deployment to build against, or None to read NOSIBLE_WORLD_URL.
         :param embed_api_key: OpenAI-compatible embedding key used to embed anchors and poles.
+        :param embed_base_url: OpenAI-compatible embedding API root. Use
+            ``https://openrouter.ai/api/v1`` for OpenRouter.
         :param cache_dir: Cache root, or None for the default.
         :param top_events: Exemplar events to keep per period, for inspection and annotation.
         :param per_date_limit: Candidates retained per anchor and date; the measured default is
@@ -214,6 +217,7 @@ class SemanticFactor:
                 weights=weights,
                 polarity_weighted=polarity_weighted,
                 embed_api_key=embed_api_key,
+                embed_base_url=embed_base_url,
                 cache_dir=cache_dir,
                 top_events=top_events,
                 per_date_limit=per_date_limit
@@ -260,6 +264,7 @@ class SemanticFactor:
     def prepare_vectors(
         self,
         embed_api_key: Optional[str],
+        embed_base_url: str,
         cache_dir: Optional[str]
     ) -> Tuple[np.ndarray, np.ndarray, List[Tuple[slice, slice]]]:
         """Embed the complete definition once and record the pole score-column layout."""
@@ -278,6 +283,7 @@ class SemanticFactor:
         matrix = embeddings.embed_texts(
             texts=texts + pole_texts,
             api_key=embed_api_key,
+            base_url=embed_base_url,
             cache_dir=cache_dir
         )
         anchors = matrix[:len(texts)]
@@ -328,6 +334,7 @@ class SemanticFactor:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         embed_api_key: Optional[str] = None,
+        embed_base_url: str = embeddings.EMBED_BASE_URL,
         cache_dir: Optional[str] = None,
         per_date_limit: int = world_client.DEFAULT_PER_DATE_LIMIT
     ) -> pl.DataFrame:
@@ -339,6 +346,7 @@ class SemanticFactor:
         start, stop = resolve_window(start_from=start_from, stop_at=stop_at)
         anchors, _, _ = self.prepare_vectors(
             embed_api_key=embed_api_key,
+            embed_base_url=embed_base_url,
             cache_dir=cache_dir
         )
         with world_client.WorldClient(
@@ -374,6 +382,7 @@ class SemanticFactor:
         weights: str,
         polarity_weighted: bool,
         embed_api_key: Optional[str],
+        embed_base_url: str,
         cache_dir: Optional[str],
         top_events: int,
         per_date_limit: int
@@ -381,6 +390,7 @@ class SemanticFactor:
         """Build a factor from the generic date-grouped World search projection."""
         anchors, pole_vectors, pole_slices = self.prepare_vectors(
             embed_api_key=embed_api_key,
+            embed_base_url=embed_base_url,
             cache_dir=cache_dir
         )
         calibration_events: Optional[int] = None

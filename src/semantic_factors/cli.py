@@ -27,7 +27,8 @@ DEFINITION_KEYS = ("anchors", "pole_hi", "pole_lo", "filters", "name", "floor", 
 
 #: Keys a spec file may carry that are passed straight to compute().
 COMPUTE_KEYS = ("weights", "residualize", "stabilize", "start_from", "stop_at", "api_key",
-                "base_url", "embed_api_key", "cache_dir", "top_events", "per_date_limit")
+                "base_url", "embed_api_key", "embed_base_url", "cache_dir", "top_events",
+                "per_date_limit")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
