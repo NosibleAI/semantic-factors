@@ -31,6 +31,40 @@ WORLD_FIRST_DATE = dt.date(2010, 1, 1)
 LITE_FIELDS = ("total_coverage", "total_netlocs", "coverage_concentration_index")
 
 
+def validate_response_windows(
+    responses: Sequence[Mapping[str, Any]],
+    start: dt.date,
+    stop: dt.date
+) -> List[Mapping[str, Any]]:
+    """Require grouped-search chunks to cover the requested window without gaps or overlap."""
+    cursor = start
+    windows: List[Mapping[str, Any]] = []
+    for response in responses:
+        window = response.get("date_window")
+        if not isinstance(window, Mapping):
+            raise ConfigurationError("World grouped response is missing its date window")
+        try:
+            window_start = dt.date.fromisoformat(str(window["from"]))
+            window_stop = dt.date.fromisoformat(str(window["to"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ConfigurationError("World grouped response has an invalid date window") from error
+        if window_start != cursor:
+            raise ConfigurationError(
+                "World grouped responses contain a date gap or overlap: "
+                f"expected {cursor.isoformat()}, got {window_start.isoformat()}"
+            )
+        if window_stop < window_start or window_stop > stop:
+            raise ConfigurationError("World grouped response has an invalid effective window")
+        windows.append(window)
+        cursor = window_stop + dt.timedelta(days=1)
+    if cursor != stop + dt.timedelta(days=1):
+        raise ConfigurationError(
+            "World grouped responses do not cover the requested window through "
+            f"{stop.isoformat()}"
+        )
+    return windows
+
+
 class SemanticFactor:
     """One factor definition, and the series it produces once computed."""
 
@@ -435,11 +469,11 @@ class SemanticFactor:
                 "diagnostics record the candidate budget so the build is auditable"
             )
         )
-        date_windows: List[Mapping[str, Any]] = []
-        for response in responses:
-            window = response.get("date_window")
-            if isinstance(window, Mapping):
-                date_windows.append(window)
+        date_windows = validate_response_windows(
+            responses=responses,
+            start=start,
+            stop=stop
+        )
         return days, exemplars, {
             "resolved_floor": resolved_floor,
             "exhaustive": False,
@@ -463,7 +497,6 @@ class SemanticFactor:
             "calibration_days": calibration_days,
             "relevance_quantiles": relevance_quantiles
         }
-
     def monthly(self) -> pl.DataFrame:
         """
         Aggregate the computed daily series to calendar months.

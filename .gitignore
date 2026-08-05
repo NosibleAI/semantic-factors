@@ -13,3 +13,6 @@ examples/output/
 *.png
 *.csv
 *.parquet
+!docs/
+!docs/images/
+!docs/images/*.png

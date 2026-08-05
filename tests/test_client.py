@@ -6,7 +6,17 @@ import pytest
 import requests
 
 from semantic_factors import cache, client
-from semantic_factors.errors import CredentialError
+from semantic_factors.errors import CredentialError, WorldApiError
+
+
+def test_obsolete_factor_service_surface_cannot_return() -> None:
+    """Keep factor builds on authenticated grouped World search only."""
+    assert client.SEARCH_PATH == "/api/search"
+    assert not hasattr(client, "FACTOR_SCORE_PATH")
+    assert not hasattr(client, "FACTOR_CALIBRATE_PATH")
+    assert not hasattr(client, "FACTOR_HEALTH_PATH")
+    assert not hasattr(client.WorldClient, "supports_scoring")
+    assert not hasattr(client.WorldClient, "score_factor")
 
 
 def test_a_window_splits_into_bounded_day_chunks_covering_it_once() -> None:
@@ -143,6 +153,46 @@ def test_retry_after_seconds_are_honoured_and_bounded() -> None:
     response.headers["Retry-After"] = "120"
 
     assert client.retry_delay(response=response, attempt=0) == client.MAX_RETRY_DELAY_SECONDS
+
+
+def test_grouped_response_requires_revision_and_complete_dates() -> None:
+    """Reject ordinary responses and grouped responses with missing dates."""
+    request = {
+        "date": {
+            "from": "2024-01-01",
+            "to": "2024-01-02"
+        }
+    }
+    response = {
+        "schema": client.GROUPED_RESPONSE_SCHEMA,
+        "revision": client.GROUPED_RESPONSE_REVISION,
+        "group_by": "date",
+        "date_window": request["date"],
+        "groups": [{"date": "2024-01-01"}]
+    }
+
+    with pytest.raises(WorldApiError):
+        client.validate_grouped_response(response=response, request=request)
+
+    response["groups"].append({"date": "2024-01-02"})
+    client.validate_grouped_response(response=response, request=request)
+
+    response["revision"] = 2
+    with pytest.raises(WorldApiError):
+        client.validate_grouped_response(response=response, request=request)
+
+
+def test_explicit_grouped_search_busy_error_is_retryable() -> None:
+    """Retry only the grouped-search capacity response among explicit 503 errors."""
+    busy = requests.Response()
+    busy.status_code = 503
+    busy._content = b'{"error":"grouped_search_busy"}'
+    stale = requests.Response()
+    stale.status_code = 503
+    stale._content = b'{"error":"fast_metadata_stale"}'
+
+    assert client.retryable_response(response=busy)
+    assert not client.retryable_response(response=stale)
 
 
 def test_the_cache_digest_is_stable_and_order_independent() -> None:

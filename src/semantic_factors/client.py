@@ -8,6 +8,7 @@ stays in this package; the World API remains a generic retrieval API.
 import datetime as dt
 import email.utils
 import os
+import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,6 +22,8 @@ WORLD_BASE_URL = "https://nosible.world"
 WORLD_KEY_VARIABLES = ("NOSIBLE_API_KEY", "SEMANTIC_FACTORS_API_KEY", "NOSIBLE_WORLD_API_KEY")
 WORLD_URL_VARIABLE = "NOSIBLE_WORLD_URL"
 SEARCH_PATH = "/api/search"
+GROUPED_RESPONSE_SCHEMA = "nosible_world_factor_search_v1"
+GROUPED_RESPONSE_REVISION = 3
 
 # The Rust route refuses wider requests. Keeping the same constant here makes a long build
 # resumable in small immutable cache entries rather than failing after one enormous response.
@@ -162,9 +165,15 @@ class WorldClient:
             key=key
         )
         cached = cache.read_json(path=path)
-        if isinstance(cached, dict) and cached.get("group_by") == "date":
-            return cached
+        if isinstance(cached, dict):
+            try:
+                validate_grouped_response(response=cached, request=body)
+            except WorldApiError:
+                pass
+            else:
+                return cached
         response = self.request(method="POST", path=SEARCH_PATH, payload=body)
+        validate_grouped_response(response=response, request=body)
         cache.write_json(path=path, payload=response)
         return response
 
@@ -187,7 +196,11 @@ class WorldClient:
             except requests.RequestException as error:
                 if attempt == MAX_ATTEMPTS - 1:
                     raise WorldApiError(f"{method} {path} failed: {error}") from error
-                time.sleep(1.5 * (attempt + 1))
+                delay = min(
+                    MAX_RETRY_DELAY_SECONDS,
+                    1.5 * (attempt + 1) + random.uniform(0.0, 0.5)
+                )
+                time.sleep(delay)
                 continue
             if response.status_code == 401:
                 raise CredentialError("NOSIBLE World rejected the API key")
@@ -197,7 +210,11 @@ class WorldClient:
                     status=403,
                     body=response.text[:400]
                 )
-            if response.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS - 1:
+            if (
+                response.status_code in RETRY_STATUSES
+                and retryable_response(response=response)
+                and attempt < MAX_ATTEMPTS - 1
+            ):
                 delay = retry_delay(response=response, attempt=attempt)
                 logs.info(
                     message=(
@@ -221,6 +238,59 @@ class WorldClient:
                 raise WorldApiError(f"{method} {path} returned a non-object JSON document")
             return decoded
         raise WorldApiError(f"{method} {path} exhausted its retries")
+
+
+def validate_grouped_response(response: Dict[str, Any], request: Dict[str, Any]) -> None:
+    """Reject ordinary, stale, or incomplete responses to a grouped search request."""
+    if response.get("schema") != GROUPED_RESPONSE_SCHEMA:
+        raise WorldApiError("World returned a non-grouped-search response")
+    if response.get("revision") != GROUPED_RESPONSE_REVISION:
+        raise WorldApiError("World returned an unsupported grouped-search revision")
+    if response.get("group_by") != "date":
+        raise WorldApiError("World returned a grouped response without date grouping")
+
+    window = response.get("date_window")
+    requested = request.get("date")
+    if not isinstance(window, dict) or not isinstance(requested, dict):
+        raise WorldApiError("World grouped response is missing its date window")
+    try:
+        effective_start = dt.date.fromisoformat(str(window["from"]))
+        effective_stop = dt.date.fromisoformat(str(window["to"]))
+        requested_start = dt.date.fromisoformat(str(requested["from"]))
+        requested_stop = dt.date.fromisoformat(str(requested["to"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise WorldApiError("World grouped response has an invalid date window") from error
+    if effective_start < requested_start or effective_stop > requested_stop:
+        raise WorldApiError("World grouped response escaped the requested date window")
+    if effective_stop < effective_start:
+        raise WorldApiError("World grouped response has an inverted date window")
+
+    groups = response.get("groups")
+    if not isinstance(groups, list):
+        raise WorldApiError("World grouped response is missing date groups")
+    group_dates = [str(group.get("date") or "") for group in groups if isinstance(group, dict)]
+    expected_dates = [
+        (effective_start + dt.timedelta(days=offset)).isoformat()
+        for offset in range((effective_stop - effective_start).days + 1)
+    ]
+    if len(group_dates) != len(groups) or len(set(group_dates)) != len(group_dates):
+        raise WorldApiError("World grouped response contains duplicate or malformed dates")
+    if set(group_dates) != set(expected_dates):
+        raise WorldApiError("World grouped response does not cover every effective date")
+
+
+def retryable_response(response: requests.Response) -> bool:
+    """Retry transient responses but fail immediately on explicit grouped-search errors."""
+    if response.status_code != 503:
+        return True
+    try:
+        payload = response.json()
+    except ValueError:
+        return True
+    if not isinstance(payload, dict):
+        return True
+    error = payload.get("error")
+    return not error or error == "grouped_search_busy"
 
 
 def resolve_base_url(base_url: Optional[str] = None) -> str:
