@@ -13,7 +13,20 @@ license-files = ["LICENSE"]
 authors = [
     {name = "NOSIBLE", email = "stuart@nosible.com"},
 ]
-keywords = ["quant", "factors", "news", "embeddings", "nosible", "alternative-data"]
+keywords = [
+    "semantic factors",
+    "semantic-factors",
+    "quantitative research",
+    "quant",
+    "risk models",
+    "stock beta",
+    "geopolitical risk",
+    "trade policy uncertainty",
+    "news",
+    "embeddings",
+    "nosible",
+    "alternative data",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
@@ -47,7 +60,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://www.nosible.com"
+Homepage = "https://www.nosible.com/semantic-factors"
 Documentation = "https://docs.nosible.com"
 Source = "https://github.com/NosibleAI/semantic-factors"
 
