@@ -96,7 +96,13 @@ def run_compute(args: argparse.Namespace) -> int:
 def safe_output_stem(output_dir: str, factor_name: str) -> str:
     """Keep a factor-controlled filename inside the caller's output directory."""
     name = str(factor_name).strip()
-    if not name or name in {".", ".."} or Path(name).name != name:
+    if (
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or Path(name).name != name
+    ):
         raise SemanticFactorError(
             "factor name must be a single filename, without an absolute path or parent traversal"
         )
