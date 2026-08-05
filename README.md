@@ -6,6 +6,19 @@
 transparent daily semantic factors. Quant portfolio managers and researchers write the definition,
 inspect the output, and rerun it when the research question changes.
 
+## See a real semantic factor
+
+### Inflation attention
+
+This factor turns US coverage of prices, costs, and inflation expectations into a dated signal. The
+chart is a real package-rendered output, not mock data.
+
+<p align="center">
+  <img src="docs/images/inflation-attention.png" alt="Inflation attention semantic factor" width="960">
+</p>
+
+<p align="center"><strong>Inflation attention</strong> - US coverage of prices, costs, and inflation expectations</p>
+
 The workflow is simple:
 
 1. Write relevance anchors and polarity pairs in plain text.
@@ -42,27 +55,6 @@ export OPENROUTER_API_KEY=sk-or-...
 ```
 
 Python 3.10 or newer is required.
-
-## See real factors first
-
-These charts are real package-rendered outputs, not mock data. The local examples include trade
-policy uncertainty, crop infestation, and US labour action. The gallery also includes three of the
-worked macro factors published with the semantic-factors page.
-
-<table>
-  <tr>
-    <td><img src="docs/images/geopolitical-risk.png" alt="Geopolitical risk semantic factor" width="480"><br><sub>Geopolitical risk</sub></td>
-    <td><img src="docs/images/trade-policy-uncertainty.png" alt="Trade policy uncertainty semantic factor" width="480"><br><sub>Trade policy uncertainty</sub></td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/sanctions-and-export-controls.png" alt="Sanctions and export controls semantic factor" width="480"><br><sub>Sanctions and export controls</sub></td>
-    <td><img src="docs/images/pandemic-and-health-risk.png" alt="Pandemic and health risk semantic factor" width="480"><br><sub>Pandemic and health risk</sub></td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/us-labour-action.png" alt="US labour action semantic factor" width="480"><br><sub>US labour action</sub></td>
-    <td><img src="docs/images/crop-infestation.png" alt="Crop infestation semantic factor" width="480"><br><sub>Crop infestation</sub></td>
-  </tr>
-</table>
 
 The complete set of 30 worked factors, their definitions, charts, CSV files, and research sources
 is available at [semantic-factors on NOSIBLE](https://www.nosible.com/semantic-factors). The
