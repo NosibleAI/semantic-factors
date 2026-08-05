@@ -33,7 +33,9 @@ DAILY_COLUMNS = (
     "raw",
     "volume",
     "baseline",
-    "share"
+    "share",
+    "polarity_num",
+    "polarity_weight",
 )
 
 
@@ -116,7 +118,9 @@ def empty_daily() -> pl.DataFrame:
             "raw": pl.Float64,
             "volume": pl.Float64,
             "baseline": pl.Float64,
-            "share": pl.Float64
+            "share": pl.Float64,
+            "polarity_num": pl.Float64,
+            "polarity_weight": pl.Float64,
         }
     )
 
@@ -135,6 +139,16 @@ def resample(daily: pl.DataFrame, every: str = "1mo") -> pl.DataFrame:
     """
     if daily.is_empty():
         return daily.rename({"date": "period"})
+    if "polarity_num" not in daily.columns or "polarity_weight" not in daily.columns:
+        # Backward compatibility for frames created before daily sufficient statistics were
+        # retained. Library-generated frames always take the exact branch below.
+        daily = daily.with_columns(
+            (pl.col("polarity") * pl.col("raw")).alias("polarity_num"),
+            pl.when(pl.col("polarity").is_not_null())
+            .then(pl.col("raw"))
+            .otherwise(0.0)
+            .alias("polarity_weight"),
+        )
     grouped = (
         daily.group_by(pl.col("date").dt.truncate(every=every).alias("period"))
         .agg(
@@ -143,8 +157,8 @@ def resample(daily: pl.DataFrame, every: str = "1mo") -> pl.DataFrame:
             pl.col("baseline").mean(),
             pl.col("n_events").sum(),
             pl.col("n_eligible").sum(),
-            (pl.col("polarity") * pl.col("raw")).sum().alias("polarity_num"),
-            pl.col("raw").filter(pl.col("polarity").is_not_null()).sum().alias("polarity_weight"),
+            pl.col("polarity_num").sum(),
+            pl.col("polarity_weight").sum(),
             pl.col("value").mean().alias("value_mean")
         )
         .sort(by="period")
@@ -157,7 +171,17 @@ def resample(daily: pl.DataFrame, every: str = "1mo") -> pl.DataFrame:
         .otherwise(None)
         .alias("polarity")
     ).select(
-        "period", "value", "polarity", "n_events", "n_eligible", "raw", "volume", "baseline", "share"
+        "period",
+        "value",
+        "polarity",
+        "n_events",
+        "n_eligible",
+        "raw",
+        "volume",
+        "baseline",
+        "share",
+        "polarity_num",
+        "polarity_weight",
     )
 
 

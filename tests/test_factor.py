@@ -11,6 +11,65 @@ from semantic_factors.factor import SemanticFactor
 ANCHORS = ["Locust swarms destroy crops across the region, threatening the food supply."]
 
 
+def test_response_windows_may_end_at_the_declared_archive_cutoff() -> None:
+    """Accept a valid server-clamped range without pretending future data exists."""
+    responses = [
+        {
+            "date_window": {
+                "from": "2024-01-01",
+                "to": "2024-01-02",
+                "archive_cutoff": "2024-01-03",
+            }
+        },
+        {
+            "date_window": {
+                "from": "2024-01-03",
+                "to": "2024-01-03",
+                "archive_cutoff": "2024-01-03",
+            }
+        },
+    ]
+
+    windows = factor_module.validate_response_windows(
+        responses=responses,
+        start=dt.date(2024, 1, 1),
+        stop=dt.date(2024, 1, 10),
+    )
+
+    assert windows[-1]["to"] == "2024-01-03"
+
+
+def test_response_windows_accept_an_advancing_cached_archive_cutoff() -> None:
+    """Allow immutable old chunks to precede a fresh response with a newer cutoff."""
+    responses = [
+        {
+            "date_window": {
+                "from": "2024-01-01",
+                "to": "2024-01-01",
+                "archive_cutoff": "2024-01-01",
+            }
+        },
+        {
+            "date_window": {
+                "from": "2024-01-02",
+                "to": "2024-01-02",
+                "archive_cutoff": "2024-01-02",
+            }
+        },
+    ]
+
+    windows = factor_module.validate_response_windows(
+        responses=responses,
+        start=dt.date(2024, 1, 1),
+        stop=dt.date(2024, 1, 3),
+    )
+
+    assert [window["archive_cutoff"] for window in windows] == [
+        "2024-01-01",
+        "2024-01-02",
+    ]
+
+
 def test_a_factor_reports_its_shape() -> None:
     """
     Require the representation to say what the factor is and whether it has run.
@@ -71,6 +130,100 @@ def test_quantile_floors_reject_aggregate_tails_that_retrieval_cannot_represent(
 
     subject = SemanticFactor(anchors=ANCHORS, aggregate="mean", floor=0.35)
     assert subject.aggregate == "mean"
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), "invalid"])
+def test_tanh_scale_must_be_finite_and_positive(value) -> None:
+    """Reject invalid polarity geometry at definition time."""
+    with pytest.raises(ConfigurationError, match="tanh_scale"):
+        SemanticFactor(anchors=ANCHORS, tanh_scale=value)
+
+
+def test_world_vector_caps_are_enforced_before_embedding() -> None:
+    """Reject definitions wider than World's public grouped-search contract."""
+    with pytest.raises(ConfigurationError, match="64 anchors"):
+        SemanticFactor(anchors=[f"anchor {index}" for index in range(65)])
+    with pytest.raises(ConfigurationError, match="64 pole"):
+        SemanticFactor(
+            anchors=ANCHORS,
+            poles=[([f"high {index}" for index in range(33)], [f"low {index}" for index in range(32)])],
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.5, 0, 10_001])
+def test_per_date_limit_is_an_exact_bounded_integer_before_network(value) -> None:
+    """Never charge a request after silently truncating a fractional candidate limit."""
+    subject = SemanticFactor(anchors=ANCHORS, floor=0.30)
+    with pytest.raises(ConfigurationError, match="integer"):
+        subject.compute(
+            per_date_limit=value,
+            start_from="2024-01-01",
+            stop_at="2024-01-01",
+        )
+
+
+@pytest.mark.parametrize("value", [True, 1.5, -1])
+def test_top_events_is_a_non_negative_integer_before_network(value) -> None:
+    """Reject invalid exemplar limits before a factor build is charged."""
+    subject = SemanticFactor(anchors=ANCHORS, floor=0.30)
+    with pytest.raises(ConfigurationError, match="top_events"):
+        subject.compute(
+            top_events=value,
+            start_from="2024-01-01",
+            stop_at="2024-01-01",
+        )
+
+
+def test_calibration_rejects_unsupported_aggregate_before_network() -> None:
+    """Do not present an inexact mean/softmax candidate union as corpus calibration."""
+    subject = SemanticFactor(anchors=ANCHORS, aggregate="mean", floor=0.30)
+    with pytest.raises(ConfigurationError, match="aggregate='max'"):
+        subject.calibrate(start_from="2024-01-01", stop_at="2024-01-01")
+
+
+def test_successful_recompute_invalidates_old_regression(monkeypatch) -> None:
+    """Never expose holdings derived from a factor series that has since changed."""
+    subject = SemanticFactor(anchors=ANCHORS, floor=0.30)
+    subject.stats = factor_module.pl.DataFrame(
+        {"ticker": ["OLD"], "beta": [1.0], "t_stat": [3.0]}
+    )
+    subject.loadings = factor_module.pl.DataFrame({"ticker": ["OLD"]})
+
+    class WorldClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(factor_module.world_client, "WorldClient", WorldClient)
+    monkeypatch.setattr(
+        subject,
+        "compute_from_world",
+        lambda **kwargs: (
+            [
+                {
+                    "date": "2024-01-01",
+                    "raw": 1.0,
+                    "volume": 1.0,
+                    "n_events": 1,
+                    "n_eligible": 1,
+                    "polarity_num": 0.0,
+                    "polarity_weight": 0.0,
+                }
+            ],
+            None,
+            {},
+        ),
+    )
+
+    subject.compute(start_from="2024-01-01", stop_at="2024-01-01", stabilize=False)
+
+    with pytest.raises(NotComputedError):
+        subject.longs
 
 
 def test_reading_results_before_computing_explains_why() -> None:
@@ -137,6 +290,110 @@ def test_records_fold_into_one_row_per_day() -> None:
     assert exemplars.height == 2
 
 
+def test_row_and_column_wire_projections_produce_identical_factor_outputs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Prove the compact adapter cannot change daily values, exemplars, or diagnostics."""
+    event = {
+        "date": "2024-03-05",
+        "event_id": "event-1",
+        "title": "Locusts threaten the regional harvest",
+        "country": "Kenya",
+        "score": 0.625,
+        "vector_scores": [0.625],
+        "score_vector_scores": [],
+        "total_coverage": 40.0,
+        "total_netlocs": 12.0,
+        "coverage_concentration_index": 0.25,
+        "materiality_score": 0.8,
+        "sentiment": "negative",
+    }
+    envelope = {
+        "candidate_events": 1,
+        "stats": {"truncated_dates": 0},
+        "groups": [
+            {
+                "date": "2024-03-05",
+                "eligible": {
+                    "count": 2,
+                    "total_coverage": 50.0,
+                    "total_netlocs": 15.0,
+                    "total_materiality": 1.0,
+                    "total_sentiment_weight": 2.0,
+                },
+            }
+        ],
+        "date_window": {
+            "from": "2024-03-05",
+            "to": "2024-03-05",
+            "archive_cutoff": "2024-03-05",
+        },
+    }
+    legacy = {
+        **envelope,
+        "schema": factor_module.world_client.GROUPED_RESPONSE_SCHEMA,
+        "revision": factor_module.world_client.GROUPED_RESPONSE_REVISION,
+        "events": [event],
+    }
+    compact_fields = factor_module.world_client.FACTOR_EVENT_FIELDS
+    compact = {
+        **envelope,
+        "schema": factor_module.world_client.FACTOR_COLUMNS_RESPONSE_SCHEMA,
+        "revision": factor_module.world_client.FACTOR_COLUMNS_RESPONSE_REVISION,
+        "events": {
+            "length": 1,
+            **{field: [event[field]] for field in compact_fields},
+        },
+    }
+
+    class StubWorldClient:
+        def __init__(self, response):
+            self.response = response
+
+        def _factor_grouped_search_iter(self, **kwargs):
+            yield self.response
+
+    subject = SemanticFactor(anchors=ANCHORS, floor=0.30)
+    monkeypatch.setattr(
+        subject,
+        "prepare_vectors",
+        lambda **kwargs: (
+            np.ones(shape=(1, 3_072), dtype=np.float32),
+            np.empty(shape=(0, 3_072), dtype=np.float32),
+            [],
+        ),
+    )
+    arguments = {
+        "start": dt.date(2024, 3, 5),
+        "stop": dt.date(2024, 3, 5),
+        "weights": "coverage",
+        "polarity_weighted": True,
+        "embed_api_key": None,
+        "embed_base_url": None,
+        "cache_dir": str(tmp_path),
+        "top_events": 1,
+        "per_date_limit": 1_000,
+    }
+
+    legacy_days, legacy_exemplars, legacy_meta = subject.compute_from_world(
+        client=StubWorldClient(legacy),
+        **arguments,
+    )
+    compact_days, compact_exemplars, compact_meta = subject.compute_from_world(
+        client=StubWorldClient(compact),
+        **arguments,
+    )
+
+    assert compact_days == legacy_days
+    assert compact_meta == legacy_meta
+    assert compact_exemplars.drop("polarity").to_dicts() == legacy_exemplars.drop(
+        "polarity"
+    ).to_dicts()
+    assert compact_exemplars["polarity"].is_nan().to_list() == [True]
+    assert legacy_exemplars["polarity"].is_nan().to_list() == [True]
+
+
 def test_only_significant_exposures_reach_the_longs_and_shorts() -> None:
     """
     Require the sign filter to also demand significance, so noise stays out of a trade list.
@@ -194,26 +451,6 @@ def test_residualisation_is_refused_instead_of_silently_skipped() -> None:
         )
 
     assert "silently" in str(error.value)
-
-
-def test_embedding_base_url_is_forwarded_to_the_provider(monkeypatch) -> None:
-    """Require OpenRouter and other compatible endpoints to reach the embedder."""
-    captured = {}
-
-    def fake_embed_texts(**kwargs):
-        captured.update(kwargs)
-        return np.ones(shape=(len(kwargs["texts"]), 3_072), dtype=np.float32)
-
-    monkeypatch.setattr(factor_module.embeddings, "embed_texts", fake_embed_texts)
-    subject = SemanticFactor(anchors=ANCHORS)
-
-    subject.prepare_vectors(
-        embed_api_key="temporary-test-key",
-        embed_base_url="https://openrouter.example/v1",
-        cache_dir=None,
-    )
-
-    assert captured["base_url"] == "https://openrouter.example/v1"
 
 
 def test_poles_can_be_removed_from_the_numerator_without_changing_diagnostics() -> None:

@@ -36,7 +36,9 @@ def synthetic(beta: float, noise: float = 0.01, seed: int = 7) -> tuple:
             "raw": level,
             "volume": [1.0] * DAYS,
             "baseline": [1.0] * DAYS,
-            "share": level
+            "share": level,
+            "polarity_num": [0.0] * DAYS,
+            "polarity_weight": [0.0] * DAYS,
         }
     ).select(series.DAILY_COLUMNS)
     return daily, pl.DataFrame(data={"date": dates, "ACME.US": returns})
@@ -177,7 +179,9 @@ def test_the_factor_is_carried_forward_onto_non_trading_days() -> None:
             "raw": [1.0] * 10,
             "volume": [1.0] * 10,
             "baseline": [1.0] * 10,
-            "share": [1.0] * 10
+            "share": [1.0] * 10,
+            "polarity_num": [0.0] * 10,
+            "polarity_weight": [0.0] * 10,
         }
     ).select(series.DAILY_COLUMNS)
     trading = pl.DataFrame(
@@ -187,3 +191,52 @@ def test_the_factor_is_carried_forward_onto_non_trading_days() -> None:
     aligned = regression.align(daily=daily, returns=trading, column="value", difference=False)
 
     assert aligned["factor"].to_list() == [0.0, 3.0, 7.0]
+
+
+def test_weekend_factor_moves_are_included_in_monday_change() -> None:
+    """Difference aligned trading-day levels so weekend information reaches Monday."""
+    friday = dt.date(2024, 5, 3)
+    dates = [friday + dt.timedelta(days=offset) for offset in range(4)]
+    daily = pl.DataFrame(
+        data={
+            "date": dates,
+            "value": [0.0, 10.0, 10.0, 10.0],
+        }
+    )
+    trading = pl.DataFrame(
+        data={"date": [dates[0], dates[3]], "ACME.US": [0.01, 0.02]}
+    )
+
+    aligned = regression.align(
+        daily=daily,
+        returns=trading,
+        column="value",
+        difference=True,
+    )
+
+    assert aligned["date"].to_list() == [dates[3]]
+    assert aligned["factor"].to_list() == [10.0]
+
+
+def test_alignment_preserves_staggered_ticker_missingness() -> None:
+    """Differencing the factor must not force all tickers onto a common calendar."""
+    dates = [dt.date(2024, 1, 1) + dt.timedelta(days=offset) for offset in range(3)]
+    daily = pl.DataFrame(data={"date": dates, "value": [0.0, 1.0, 3.0]})
+    returns = pl.DataFrame(
+        data={
+            "date": dates,
+            "A.US": [0.1, None, 0.2],
+            "B.US": [None, 0.3, 0.4],
+        }
+    )
+
+    aligned = regression.align(
+        daily=daily,
+        returns=returns,
+        column="value",
+        difference=True,
+    )
+
+    assert aligned.height == 2
+    assert aligned["A.US"].to_list() == [None, 0.2]
+    assert aligned["B.US"].to_list() == [0.3, 0.4]

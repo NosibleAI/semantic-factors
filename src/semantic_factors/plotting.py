@@ -6,10 +6,9 @@ SemanticFactor.plot() and never at package import.
 The layout is transcribed from the NOSIBLE World Risk Indicators deck rather than invented.
 Three of its decisions are load-bearing and none are obvious:
 
-**The trend is a quadratic mean, not an average.** A root-mean-square over the window weights
-loud days by their square, so an episode lifts the line and a quiet fortnight does not drag it
-back as fast. A plain moving average of a spiky news series understates every episode it is
-supposed to describe.
+**The default is the public-site curve.** Unsigned values receive the reviewed tanh display
+squash, then a 30-day geometric mean and a 7-day rolling average. The chart draws that single
+green curve by default; arithmetic and quadratic comparisons remain explicit options.
 
 Three trends can be drawn together. For non-negative data they always nest, geometric below
 arithmetic below quadratic by the power-mean inequality, so the gap between them is itself a
@@ -86,22 +85,32 @@ LABEL_SPAN = (0.10, 0.89)
 #: Space two labels on the same row must keep between them, as a figure fraction.
 LABEL_MIN_GAP = 0.155
 
-#: Window of the trailing means, in days.
-TREND_DAYS = 90
+#: Calendar window of the inner trend, matching the public website plots.
+TREND_DAYS = 30
 
-#: The trends that can be drawn, in the order they are layered, with their colours. Quadratic
-#: is drawn last and in the brand green because it is the one the published indicators use.
+#: Calendar window used to smooth the inner trend for display.
+DISPLAY_TREND_DAYS = 7
+
+#: Observations needed before the inner trend is available.
+TREND_MIN_OBSERVATIONS = 5
+
+#: Observations needed before the outer display trend is available.
+DISPLAY_TREND_MIN_OBSERVATIONS = 1
+
+#: Bounds and steepness of the visual cosine-like display squash.
+PLOT_SQUASH_LOW = 0.25
+PLOT_SQUASH_HIGH = 0.50
+PLOT_SQUASH_K = 6.0
+
+#: The means that can be drawn, in the order they are layered, with their brand colours.
 TREND_COLOURS = {
-    "geometric": AMBER,
+    "geometric": NEO_GREEN,
     "arithmetic": SIGNAL_BLUE,
-    "quadratic": NEO_GREEN
+    "quadratic": AMBER,
 }
 
-#: Trends drawn when the caller does not choose.
-DEFAULT_TRENDS = ("arithmetic", "geometric", "quadratic")
-
-#: Days in the window that must carry a value before the trend is drawn.
-TREND_MIN_OBSERVATIONS = 10
+#: Means drawn when the caller does not choose.
+DEFAULT_TRENDS = ("geometric",)
 
 #: Peaks labelled when the caller names no episodes.
 ANNOTATION_COUNT = 10
@@ -130,7 +139,9 @@ def plot_factor(
     slug: str = "",
     regimes: Optional[Sequence[Tuple[str, str]]] = None,
     column: str = "value",
-    trends: Sequence[str] = DEFAULT_TRENDS
+    trends: Optional[Sequence[str]] = None,
+    signed: bool = False,
+    means: Optional[Sequence[str]] = None,
 ) -> Any:
     """
     Draw a factor as a risk-indicator page.
@@ -147,13 +158,26 @@ def plot_factor(
     :param slug: Machine name shown in the footer.
     :param regimes: Date ranges to shade, as (start, stop) ISO pairs.
     :param column: Column of the daily frame to draw.
-    :param trends: Which trailing means to draw; see TREND_COLOURS.
+    :param trends: Backward-compatible name for which trailing means to draw.
+    :param signed: Preserve a zero-centred signed scale, used for pole polarity.
+    :param means: Which trailing means to draw, alone or together; see TREND_COLOURS.
     :return: The matplotlib figure.
     """
-    chosen = [name for name in TREND_COLOURS if name in trends]
+    if trends is not None and means is not None:
+        raise ValueError("pass either trends or means, not both")
+    requested = means if means is not None else trends
+    requested = tuple(requested) if requested is not None else DEFAULT_TRENDS
+    unknown = [name for name in requested if name not in TREND_COLOURS]
+    if unknown:
+        raise ValueError(
+            f"unknown trend {unknown[0]!r}; expected one of {sorted(TREND_COLOURS)}"
+        )
+    chosen = list(dict.fromkeys(requested))
+    if signed:
+        chosen = ["arithmetic"]
     if not chosen:
         raise ValueError(f"trends must name at least one of {sorted(TREND_COLOURS)}")
-    frame = prepare(daily=daily, column=column, trends=chosen)
+    frame = prepare(daily=daily, column=column, trends=chosen, signed=signed)
     figure = plt.figure(figsize=FIGURE_SIZE, dpi=FIGURE_DPI, facecolor=OBSIDIAN)
     axis = figure.add_axes(AXES_RECT)
     axis.set_facecolor(OBSIDIAN)
@@ -161,7 +185,11 @@ def plot_factor(
     dates: List[dt.date] = frame["date"].to_list()
     stamps = matplotlib.dates.date2num(dates)
     raw = frame["raw_scaled"].to_numpy()
-    ceiling = headroom(raw=raw, trend=frame[chosen[-1]].to_numpy())
+    ceiling = (
+        signed_headroom(raw=raw, trend=frame[chosen[-1]].to_numpy())
+        if signed
+        else headroom(raw=raw, trend=frame[chosen[-1]].to_numpy())
+    )
 
     draw_regimes(axis=axis, regimes=regimes)
     axis.vlines(stamps, 0.0, raw, colors=RAW_GREY, linewidth=0.45, alpha=0.55)
@@ -170,16 +198,16 @@ def plot_factor(
             stamps,
             frame[drawn].to_numpy(),
             color=TREND_COLOURS[drawn],
-            linewidth=1.7 if drawn == "quadratic" else 1.1,
+            linewidth=1.7 if drawn == "geometric" else 1.1,
             solid_joinstyle="round"
         )
-    axis.set_ylim(bottom=0.0, top=ceiling)
+    axis.set_ylim(bottom=-ceiling if signed else 0.0, top=ceiling)
     axis.set_xlim(left=float(stamps[0]), right=float(stamps[-1]))
 
-    style_axes(axis=axis, ceiling=ceiling, dates=dates)
+    style_axes(axis=axis, ceiling=ceiling, dates=dates, signed=signed)
     header(figure=figure, name=name, subtitle=subtitle, regimes=regimes, trends=chosen)
     footer(figure=figure, slug=slug or name.lower().replace(" ", "_"))
-    if annotate:
+    if annotate and not signed:
         draw_labels(
             figure=figure,
             axis=axis,
@@ -193,13 +221,19 @@ def plot_factor(
     return figure
 
 
-def prepare(daily: pl.DataFrame, column: str, trends: Sequence[str]) -> pl.DataFrame:
+def prepare(
+    daily: pl.DataFrame,
+    column: str,
+    trends: Sequence[str],
+    signed: bool = False,
+) -> pl.DataFrame:
     """
     Rebase the series and attach each requested trailing mean.
 
     :param daily: Daily frame.
     :param column: Column to draw.
     :param trends: Names of the means to compute.
+    :param signed: Keep signed values on their natural zero-centred scale.
     :return: Frame of date, raw_scaled, and one column per requested trend.
     """
     if daily.is_empty():
@@ -209,7 +243,8 @@ def prepare(daily: pl.DataFrame, column: str, trends: Sequence[str]) -> pl.DataF
         raise ValueError(f"there is nothing to plot: every {column} is null")
     values = frame[column].to_numpy().astype(np.float64)
     average = float(np.nanmean(values))
-    scaled = values / average * REBASE_MEAN if average else values
+    scaled = values if signed else (values / average * REBASE_MEAN if average else values)
+    scaled = squash_plot_values(values=scaled, signed=signed)
     dates = frame["date"].to_list()
     return frame.select("date").with_columns(
         pl.Series(name="raw_scaled", values=scaled),
@@ -224,15 +259,10 @@ def trailing_mean(values: np.ndarray, dates: Sequence[dt.date], kind: str) -> np
     """
     Compute one trailing mean of a daily series over a calendar window.
 
-    The quadratic mean is the one the published indicators use. A plain average understates
-    every episode in a spiky series: one day at twenty times the run rate moves a ninety-day
-    mean by a fifth of its own size, where squaring before averaging lets it register.
-
-    The geometric mean is taken on log1p and inverted with expm1. The textbook form is zero
-    whenever any day in the window is zero, and for a factor matching a handful of events a day
-    that is nearly every window, so the textbook form would draw a line flat on the floor. This
-    variant tends to the arithmetic mean for small values and stays below it for large ones,
-    which is the behaviour the comparison is for.
+    Each mean is calculated over 30 calendar days, then averaged over seven calendar days for
+    display. The geometric mean is taken on log1p and inverted with expm1. The textbook form is
+    zero whenever any day in the window is zero, and for a sparse news factor that would draw a
+    line flat on the floor.
 
     :param values: Daily values, already rebased.
     :param dates: The dates those values fall on, ascending.
@@ -242,28 +272,79 @@ def trailing_mean(values: np.ndarray, dates: Sequence[dt.date], kind: str) -> np
     if kind == "quadratic":
         prepared = np.square(values)
     elif kind == "geometric":
-        prepared = np.log1p(np.clip(a=values, a_min=0.0, a_max=None))
+        prepared = np.log1p(np.abs(values))
     elif kind == "arithmetic":
         prepared = values
     else:
         raise ValueError(f"unknown trend {kind!r}; expected one of {sorted(TREND_COLOURS)}")
 
-    output = np.full(shape=values.shape, fill_value=np.nan)
+    inner = rolling_mean(
+        values=prepared,
+        dates=dates,
+        window_days=TREND_DAYS,
+        minimum=TREND_MIN_OBSERVATIONS,
+    )
+    if kind == "quadratic":
+        inner = np.sqrt(inner)
+    elif kind == "geometric":
+        inner = np.expm1(inner)
+    return rolling_mean(
+        values=inner,
+        dates=dates,
+        window_days=DISPLAY_TREND_DAYS,
+        minimum=DISPLAY_TREND_MIN_OBSERVATIONS,
+    )
+
+
+def rolling_mean(
+    values: np.ndarray,
+    dates: Sequence[dt.date],
+    window_days: int,
+    minimum: int,
+) -> np.ndarray:
+    """Calculate a calendar-window arithmetic mean over finite observations."""
+    output = np.full(shape=values.shape, fill_value=np.nan, dtype=np.float64)
     start = 0
     for index, today in enumerate(dates):
-        while (today - dates[start]).days >= TREND_DAYS:
+        while start < index and (today - dates[start]).days >= window_days:
             start += 1
-        window = prepared[start:index + 1]
-        if window.size < TREND_MIN_OBSERVATIONS:
-            continue
-        average = float(window.mean())
-        if kind == "quadratic":
-            output[index] = float(np.sqrt(average))
-        elif kind == "geometric":
-            output[index] = float(np.expm1(average))
-        else:
-            output[index] = average
+        window = values[start:index + 1]
+        finite = window[np.isfinite(window)]
+        if finite.size >= minimum:
+            output[index] = float(finite.mean())
     return output
+
+
+def squash_plot_values(values: np.ndarray, signed: bool = False) -> np.ndarray:
+    """Apply the public website's bounded tanh display transform.
+
+    The native daily factor remains unchanged. For plotting, the first and ninety-ninth
+    percentiles are mapped to the reviewed 0.25--0.50 cosine interval, then squashed with
+    ``tanh(k * (x - 0.5))`` at ``k=6`` and rebased to a mean of 100.
+    """
+    if signed or not values.size:
+        return values
+    finite = values[np.isfinite(values)]
+    if not finite.size:
+        return values
+    lower, upper = np.quantile(finite, [0.01, 0.99])
+    if upper <= lower:
+        return np.full_like(values, REBASE_MEAN)
+    proxy = PLOT_SQUASH_LOW + (PLOT_SQUASH_HIGH - PLOT_SQUASH_LOW) * np.clip(
+        (np.nan_to_num(values, nan=0.0) - lower) / (upper - lower),
+        0.0,
+        1.0,
+    )
+    unit = np.clip(
+        (proxy - PLOT_SQUASH_LOW) / (PLOT_SQUASH_HIGH - PLOT_SQUASH_LOW),
+        0.0,
+        1.0,
+    )
+    half = np.tanh(PLOT_SQUASH_K / 2.0)
+    squashed = (np.tanh(PLOT_SQUASH_K * (unit - 0.5)) + half) / (2.0 * half)
+    squashed[~np.isfinite(values)] = np.nan
+    average = float(np.nanmean(squashed))
+    return squashed / average * REBASE_MEAN if average else squashed
 
 
 def headroom(raw: np.ndarray, trend: np.ndarray) -> float:
@@ -278,6 +359,16 @@ def headroom(raw: np.ndarray, trend: np.ndarray) -> float:
     if peak > 0:
         return peak / TREND_HEADROOM
     return float(np.nanmax(raw)) or 1.0
+
+
+def signed_headroom(raw: np.ndarray, trend: np.ndarray) -> float:
+    """Return a symmetric limit that preserves both poles around zero."""
+    finite_trend = np.abs(trend[np.isfinite(trend)])
+    peak = float(finite_trend.max()) if finite_trend.size else 0.0
+    if peak > 0:
+        return peak / TREND_HEADROOM
+    finite_raw = np.abs(raw[np.isfinite(raw)])
+    return float(finite_raw.max()) if finite_raw.size and finite_raw.max() > 0 else 1.0
 
 
 def draw_regimes(axis: Any, regimes: Optional[Sequence[Tuple[str, str]]]) -> None:
@@ -298,21 +389,32 @@ def draw_regimes(axis: Any, regimes: Optional[Sequence[Tuple[str, str]]]) -> Non
         )
 
 
-def style_axes(axis: Any, ceiling: float, dates: Sequence[dt.date]) -> None:
+def style_axes(
+    axis: Any,
+    ceiling: float,
+    dates: Sequence[dt.date],
+    signed: bool = False,
+) -> None:
     """
     Apply the deck's axis treatment: no spines, five ticks, faint year rules.
 
     :param axis: Axes to style.
     :param ceiling: Top of the axis.
     :param dates: The dates plotted, for the year rules.
+    :param signed: Draw symmetric negative-to-positive tick labels.
     :return: None.
     """
     for spine in axis.spines.values():
         spine.set_visible(False)
     axis.tick_params(axis="both", length=0, pad=6)
-    axis.set_yticks([ceiling * step / 4 for step in range(5)])
+    ticks = (
+        [ceiling * step / 2 for step in range(-2, 3)]
+        if signed
+        else [ceiling * step / 4 for step in range(5)]
+    )
+    axis.set_yticks(ticks)
     axis.set_yticklabels(
-        [f"{ceiling * step / 4:#.4g}" for step in range(5)],
+        [f"{tick:#.4g}" for tick in ticks],
         fontsize=7.5,
         fontfamily=FONT_BODY,
         color=BODY_GREY
@@ -378,8 +480,8 @@ def legend(
     """
     Draw the right-aligned legend strip.
 
-    The window length is named once, on the first trend, rather than repeated: three entries
-    each opening with "90-DAY" run the strip into the title.
+    The default label names both stages of the public plotting recipe. Optional comparison
+    curves use the same 30-day inner and 7-day outer windows.
 
     :param figure: Figure to draw on.
     :param regimes: Whether a regime swatch is included.
@@ -387,9 +489,14 @@ def legend(
     :return: None.
     """
     entries = [("RAW DAILY", RAW_GREY, "line")]
-    for position, kind in enumerate(trends):
-        prefix = f"{TREND_DAYS}-DAY " if position == 0 else ""
-        entries.append((f"{prefix}{kind.upper()}", TREND_COLOURS[kind], "line"))
+    for kind in trends:
+        entries.append(
+            (
+                f"{DISPLAY_TREND_DAYS}D AVG OF {TREND_DAYS}D {kind.upper()}",
+                TREND_COLOURS[kind],
+                "line",
+            )
+        )
     if regimes:
         entries.append(("REGIME", REGIME_GREY, "patch"))
     cursor = 0.972

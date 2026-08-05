@@ -107,6 +107,48 @@ FIELD_TYPES: Dict[str, str] = {
     "wiki_qid": "string_set"
 }
 
+#: Ranked ontology candidates exposed by the World inverted-index sidecar. These names are
+#: deliberately explicit: adding a taxonomy in World must produce a visible client diff and a
+#: contract-test failure rather than silently leaving the public Python vocabulary behind.
+ONTOLOGY_TOP3_FIELDS = (
+    "iab_tier_1_top3",
+    "iab_tier_2_top3",
+    "iab_tier_3_top3",
+    "iab_tier_4_top3",
+    "iptc_genre_top3",
+    "iptc_media_topic_l1_top3",
+    "iptc_media_topic_l2_top3",
+    "iptc_media_topic_l3_top3",
+    "media_frame_top3",
+    "ekman7_emotion_top3",
+    "schema_org_event_top3",
+    "gics_sector_top3",
+    "gics_industry_group_top3",
+    "gics_industry_top3",
+    "gics_sub_industry_top3",
+    "asset_class_main_class_top3",
+    "asset_class_sub_class_top3",
+    "sdgs_goal_top3",
+    "sdgs_target_top3",
+    "nosible_category_top3",
+    "nosible_subcategory_top3",
+    "nosible_event_top3",
+    "icd11_chapter_top3",
+    "icd11_block_top3",
+    "emdat_disaster_group_top3",
+    "emdat_disaster_subgroup_top3",
+    "emdat_disaster_type_top3",
+    "mitre_attack_tactic_top3",
+    "mitre_attack_technique_top3",
+    "mitre_attack_subtechnique_top3",
+    "sportsml_sport_top3",
+    "sportsml_event_type_top3",
+    "plover_event_top3",
+    "plover_mode_top3",
+    "plover_context_top3",
+)
+FIELD_TYPES.update({field: "string_set" for field in ONTOLOGY_TOP3_FIELDS})
+
 #: Friendly names the API accepts, mapped onto their canonical field.
 FIELD_ALIASES: Dict[str, str] = {
     "languages": "language",

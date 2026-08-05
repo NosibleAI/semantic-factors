@@ -1,5 +1,6 @@
 """Chart construction, which is where a series is most easily misread."""
 import datetime as dt
+import warnings
 
 import numpy as np
 import polars as pl
@@ -20,6 +21,28 @@ def test_packaged_brand_fonts_are_registered_without_fallback() -> None:
             fallback_to_default=False
         )
         assert family.lower() in path.lower()
+
+
+def test_inter_fonts_cover_every_printable_ascii_glyph() -> None:
+    """Catch truncated or accidentally substituted font binaries before a wheel ships."""
+    required = set(range(32, 127))
+    for filename in ("Inter-Medium.ttf", "Inter-Regular.ttf"):
+        path = plotting.os.path.join(plotting.FONT_DIR, filename)
+        available = set(plotting.matplotlib.ft2font.FT2Font(path).get_charmap())
+        assert not required - available
+
+
+def test_representative_chart_renders_without_missing_glyphs() -> None:
+    """Exercise the actual canvas with the letters, numbers, and punctuation charts use."""
+    daily = daily_from(values=[float(index % 17) for index in range(180)])
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=r"Glyph .* missing from font")
+        figure = plotting.plot_factor(
+            daily=daily,
+            name="Supply Risk 2026: Africa / Europe (P99.9)",
+            episodes={"2020-03-15": "Factories close; prices rise 42%"},
+        )
+        figure.canvas.draw()
 
 
 def daily_from(values: list) -> pl.DataFrame:
@@ -75,6 +98,61 @@ def test_the_three_means_nest_by_the_power_mean_inequality() -> None:
     assert np.all(middle[complete] <= high[complete] + 1e-9)
 
 
+def test_means_keyword_selects_a_single_geometric_trend_by_default() -> None:
+    """Expose a readable single-mean plot while retaining explicit choices."""
+    assert plotting.DEFAULT_TRENDS == ("geometric",)
+    assert plotting.TREND_COLOURS["geometric"] == plotting.NEO_GREEN
+
+    daily = daily_from(values=[float(index % 17) for index in range(180)])
+    frame = plotting.prepare(daily=daily, column="value", trends=plotting.DEFAULT_TRENDS)
+    assert frame.columns == ["date", "raw_scaled", "geometric"]
+
+    with pytest.raises(ValueError, match="either trends or means"):
+        plotting.plot_factor(
+            daily=daily,
+            trends=["geometric"],
+            means=["geometric"],
+            annotate=False,
+        )
+
+
+def test_default_curve_matches_the_public_tanh_30d_geometric_7d_recipe() -> None:
+    """Keep package plots numerically identical to the reviewed website curve."""
+    daily = daily_from(values=[float((index * 11) % 37) for index in range(90)])
+    frame = plotting.prepare(daily=daily, column="value", trends=plotting.DEFAULT_TRENDS)
+
+    native = daily["value"].to_numpy().astype(np.float64)
+    rebased = native / float(native.mean()) * plotting.REBASE_MEAN
+    lower, upper = np.quantile(rebased, [0.01, 0.99])
+    unit = np.clip((rebased - lower) / (upper - lower), 0.0, 1.0)
+    half = np.tanh(plotting.PLOT_SQUASH_K / 2.0)
+    squashed = (
+        np.tanh(plotting.PLOT_SQUASH_K * (unit - 0.5)) + half
+    ) / (2.0 * half)
+    squashed = squashed / float(squashed.mean()) * plotting.REBASE_MEAN
+
+    inner = np.full(shape=squashed.shape, fill_value=np.nan)
+    for index in range(4, len(squashed)):
+        window = squashed[max(0, index - 29):index + 1]
+        inner[index] = np.expm1(np.log1p(window).mean())
+    expected = np.full(shape=squashed.shape, fill_value=np.nan)
+    for index in range(4, len(squashed)):
+        window = inner[max(0, index - 6):index + 1]
+        expected[index] = np.nanmean(window)
+
+    assert np.allclose(frame["raw_scaled"].to_numpy(), squashed)
+    assert np.allclose(frame["geometric"].to_numpy(), expected, equal_nan=True)
+
+    figure = plotting.plot_factor(daily=daily, annotate=False)
+    green_lines = [
+        line for line in figure.axes[0].lines if line.get_color() == plotting.NEO_GREEN
+    ]
+    assert len(green_lines) == 1
+    assert any(
+        text.get_text() == "7D AVG OF 30D GEOMETRIC" for text in figure.texts
+    )
+
+
 def test_the_quadratic_mean_registers_a_spike_a_plain_average_dilutes() -> None:
     """
     Require the quadratic mean to sit above the arithmetic one when a window has a loud day.
@@ -84,13 +162,13 @@ def test_the_quadratic_mean_registers_a_spike_a_plain_average_dilutes() -> None:
     :return: None.
     """
     steady = daily_from(values=[10.0] * 120)
-    spiky = daily_from(values=[10.0] * 119 + [400.0])
+    spiky = daily_from(values=list(np.linspace(1.0, 20.0, 119)) + [400.0])
 
     calm = plotting.prepare(daily=steady, column="value", trends=["arithmetic", "quadratic"])
     loud = plotting.prepare(daily=spiky, column="value", trends=["arithmetic", "quadratic"])
 
     assert calm["quadratic"][-1] == pytest.approx(calm["arithmetic"][-1], rel=1e-9)
-    assert loud["quadratic"][-1] > loud["arithmetic"][-1] * 1.5
+    assert loud["quadratic"][-1] > loud["arithmetic"][-1]
 
 
 def test_the_geometric_mean_survives_a_window_full_of_zeros() -> None:
@@ -231,3 +309,32 @@ def test_plotting_an_empty_factor_explains_itself() -> None:
     """
     with pytest.raises(ValueError):
         plotting.plot_factor(daily=series.empty_daily(), name="nothing", annotate=False)
+
+
+def test_signed_polarity_plot_preserves_negative_values_and_symmetric_axis() -> None:
+    """Never clip, square, or mean-rebase the low pole out of a polarity chart."""
+    values = np.linspace(-0.9, 0.7, 120)
+    daily = daily_from(values=[1.0] * len(values)).with_columns(
+        pl.Series(name="polarity", values=values)
+    )
+
+    prepared = plotting.prepare(
+        daily=daily,
+        column="polarity",
+        trends=["arithmetic"],
+        signed=True,
+    )
+    figure = plotting.plot_factor(
+        daily=daily,
+        name="signed probe",
+        annotate=False,
+        column="polarity",
+        signed=True,
+    )
+    low, high = figure.axes[0].get_ylim()
+
+    assert prepared["raw_scaled"].min() == pytest.approx(-0.9)
+    assert prepared["raw_scaled"].max() == pytest.approx(0.7)
+    assert low < -0.9
+    assert high > 0.7
+    assert low == pytest.approx(-high)

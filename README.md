@@ -87,7 +87,7 @@ export NOSIBLE_API_KEY=nos_sk_...
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-Python 3.10 or newer is required.
+Python 3.10 through 3.13 is supported.
 
 The complete set of 30 worked factors, with definitions, charts, CSV files, and the research
 lineage behind each one, lives at
@@ -162,6 +162,12 @@ factor.plot(
     path="output/geopolitical_risk.png",
 )
 ```
+
+`plot()` uses the same display recipe as the NOSIBLE website out of the box. It applies the
+reviewed tanh squash to the displayed daily values, calculates a 30-day geometric mean, then
+draws its 7-day rolling average as the single green trend. The native factor values returned by
+`compute()` and written to CSV are not changed by this display-only transform. Pass `means=` only
+when you deliberately want comparison curves.
 
 Notice what just happened. In 1973 this was the unmeasurable part: "the state of the world" was a
 theoretical object with no instrument attached. Here it is twelve sentences and two polarity

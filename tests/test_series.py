@@ -1,6 +1,9 @@
 """Turning daily sufficient statistics into a factor time series."""
 import datetime as dt
 
+import polars as pl
+import pytest
+
 from semantic_factors import series
 
 START = dt.date(2020, 1, 1)
@@ -193,6 +196,58 @@ def test_resampling_rebuilds_ratios_from_sums() -> None:
 
     assert monthly.height == 1
     assert abs(monthly["share"][0] - 130.0 / 400.0) < 1e-9
+
+
+def test_resampling_uses_base_polarity_sufficient_statistics() -> None:
+    """Preserve a heavily weighted low-pole event when aggregating periods."""
+    records = days(count=2, raw=1.0, volume=100.0)
+    records[0].update({"polarity_num": 1.0, "polarity_weight": 1.0})
+    records[1].update(
+        {
+            "raw": 0.0,
+            "polarity_num": -100.0,
+            "polarity_weight": 100.0,
+        }
+    )
+    frame = series.daily_frame(
+        days=records,
+        start=START,
+        stop=START + dt.timedelta(days=1),
+        stabilize=False,
+    )
+
+    monthly = series.resample(daily=frame, every="1mo")
+
+    assert monthly["polarity"][0] == pytest.approx(-99.0 / 101.0)
+    assert monthly["polarity_weight"][0] == 101.0
+
+
+def test_resampling_legacy_frame_preserves_rows_with_null_polarity() -> None:
+    """The nine-column compatibility path must not shorten mixed-polarity frames."""
+    frame = series.daily_frame(
+        days=days(count=2),
+        start=START,
+        stop=START + dt.timedelta(days=1),
+        stabilize=False,
+    ).select(
+        "date",
+        "value",
+        "polarity",
+        "n_events",
+        "n_eligible",
+        "raw",
+        "volume",
+        "baseline",
+        "share",
+    )
+    frame = frame.with_columns(
+        pl.Series(name="polarity", values=[None, 0.5], dtype=pl.Float64)
+    )
+
+    monthly = series.resample(daily=frame, every="1mo")
+
+    assert monthly["polarity_weight"][0] == 1.0
+    assert monthly["polarity"][0] == pytest.approx(0.5)
 
 
 def test_an_empty_result_still_has_the_right_schema() -> None:

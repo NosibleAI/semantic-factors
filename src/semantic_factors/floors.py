@@ -28,6 +28,9 @@ from semantic_factors.errors import ConfigurationError
 #: Floor used when the caller does not choose one.
 DEFAULT_FLOOR = "p99.9"
 
+#: Lowest absolute cosine floor accepted by the public package.
+MIN_ABSOLUTE_FLOOR = 0.30
+
 #: Quantiles reported by calibration, so a caller can see the trade-off before committing.
 REPORTED_QUANTILES = (0.99, 0.995, 0.999, 0.9995, 0.9999)
 
@@ -81,6 +84,10 @@ def validate(floor: FloorSpec) -> FloorSpec:
     value = float(floor)
     if not 0.0 < value < 1.0:
         raise ConfigurationError(f"an absolute floor must lie in (0, 1), got {value}")
+    if value < MIN_ABSOLUTE_FLOOR:
+        raise ConfigurationError(
+            f"an absolute floor must be at least {MIN_ABSOLUTE_FLOOR:.2f}, got {value:.4f}"
+        )
     return value
 
 

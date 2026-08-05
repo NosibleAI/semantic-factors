@@ -7,7 +7,7 @@ name = "semantic-factors"
 dynamic = ["version"]
 description = "Build quantitative factors from NOSIBLE World events by describing them in plain English."
 readme = "README.md"
-requires-python = ">=3.10,<4"
+requires-python = ">=3.10,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
@@ -35,7 +35,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
@@ -45,7 +44,8 @@ classifiers = [
 dependencies = [
     # NumPy 2.5's type stubs require Python 3.12 syntax, while this package supports 3.10.
     "numpy>=1.24,<2.5",
-    "polars>=1.0",
+    # rolling_mean_by(..., min_samples=...) requires Polars 1.21 or newer.
+    "polars>=1.21",
     "requests>=2.31",
 ]
 

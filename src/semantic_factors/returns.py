@@ -7,8 +7,12 @@ from in the first place.
 """
 import concurrent.futures as futures
 import datetime as dt
+import email.utils
+import math
 import os
-from typing import Dict, List, Optional, Sequence
+import random
+import time
+from typing import Dict, List, Mapping, Optional, Sequence
 
 import polars as pl
 import requests
@@ -24,6 +28,9 @@ EODHD_KEY_VARIABLES = ("EODHD_API_KEY", "EODHD_API_TOKEN", "SEMANTIC_FACTORS_EOD
 
 #: Concurrent downloads.
 DOWNLOAD_WORKERS = 8
+EODHD_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+EODHD_MAX_ATTEMPTS = 4
+EODHD_MAX_RETRY_DELAY_SECONDS = 30.0
 
 
 def download_returns(
@@ -93,30 +100,95 @@ def download_closes(
     :param api_key: EODHD key.
     :return: Two-column frame of date and close, or None when nothing came back.
     """
-    response = session.get(
-        url=f"{EODHD_URL}/{ticker}",
-        params={
-            "api_token": api_key,
-            "from": start.isoformat(),
-            "to": stop.isoformat(),
-            "period": "d",
-            "fmt": "json"
-        },
-        timeout=(10, 120)
-    )
-    if response.status_code == 401 or response.status_code == 403:
-        raise CredentialError("EODHD rejected the API key")
-    if response.status_code == 404:
-        return None
-    response.raise_for_status()
-    rows = response.json()
+    response: Optional[requests.Response] = None
+    for attempt in range(EODHD_MAX_ATTEMPTS):
+        try:
+            response = session.get(
+                url=f"{EODHD_URL}/{ticker}",
+                params={
+                    "api_token": api_key,
+                    "from": start.isoformat(),
+                    "to": stop.isoformat(),
+                    "period": "d",
+                    "fmt": "json"
+                },
+                timeout=(10, 120)
+            )
+        except requests.RequestException:
+            if attempt == EODHD_MAX_ATTEMPTS - 1:
+                raise ReturnsUnavailableError(
+                    f"EODHD request for {ticker} failed after {EODHD_MAX_ATTEMPTS} attempts"
+                ) from None
+            time.sleep(eodhd_retry_delay(response=None, attempt=attempt))
+            continue
+        if response.status_code in (401, 403):
+            raise CredentialError("EODHD rejected the API key")
+        if response.status_code == 404:
+            return None
+        if response.status_code in EODHD_RETRY_STATUSES and attempt < EODHD_MAX_ATTEMPTS - 1:
+            time.sleep(eodhd_retry_delay(response=response, attempt=attempt))
+            continue
+        if response.status_code >= 400:
+            raise ReturnsUnavailableError(
+                f"EODHD request for {ticker} returned HTTP {response.status_code}"
+            )
+        break
+    if response is None:
+        raise ReturnsUnavailableError(f"EODHD request for {ticker} produced no response")
+    try:
+        rows = response.json()
+    except ValueError as error:
+        raise ReturnsUnavailableError(f"EODHD returned invalid JSON for {ticker}") from error
     if not isinstance(rows, list) or not rows:
-        return None
+        if rows == []:
+            return None
+        raise ReturnsUnavailableError(f"EODHD returned a non-list price document for {ticker}")
+    dates: List[dt.date] = []
+    closes: List[float] = []
+    for index, row in enumerate(rows):
+        try:
+            if not isinstance(row, Mapping):
+                raise TypeError("row is not an object")
+            date = dt.date.fromisoformat(str(row["date"]))
+            close = float(row["adjusted_close"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ReturnsUnavailableError(
+                f"EODHD returned an invalid price row for {ticker} at index {index}"
+            ) from error
+        if not math.isfinite(close) or close <= 0.0:
+            raise ReturnsUnavailableError(
+                f"EODHD returned an invalid adjusted_close for {ticker} at index {index}"
+            )
+        dates.append(date)
+        closes.append(close)
+    if len(set(dates)) != len(dates):
+        raise ReturnsUnavailableError(f"EODHD returned duplicate price dates for {ticker}")
     return pl.DataFrame(
         data={
-            "date": [dt.date.fromisoformat(row["date"]) for row in rows],
-            ticker: [float(row["adjusted_close"]) for row in rows]
+            "date": dates,
+            ticker: closes
         }
+    ).sort(by="date")
+
+
+def eodhd_retry_delay(response: Optional[requests.Response], attempt: int) -> float:
+    """Return a bounded Retry-After-aware delay with jitter for EODHD transients."""
+    raw = "" if response is None else response.headers.get("Retry-After", "").strip()
+    delay: Optional[float] = None
+    if raw:
+        try:
+            delay = float(raw)
+        except ValueError:
+            try:
+                parsed = email.utils.parsedate_to_datetime(raw)
+                if parsed is not None:
+                    delay = parsed.timestamp() - time.time()
+            except (OverflowError, TypeError, ValueError):
+                delay = None
+    base = delay if delay is not None and delay > 0 else 1.5 * (2 ** attempt)
+    return min(
+        EODHD_MAX_RETRY_DELAY_SECONDS,
+        max(0.1, base + random.uniform(0.0, 0.25)),
     )
 
 

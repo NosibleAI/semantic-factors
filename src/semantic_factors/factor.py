@@ -29,6 +29,19 @@ WORLD_FIRST_DATE = dt.date(2010, 1, 1)
 
 #: Fields the grouped World projection returns for each retained event.
 LITE_FIELDS = ("total_coverage", "total_netlocs", "coverage_concentration_index")
+MAX_RETRIEVAL_VECTORS = 64
+MAX_SCORE_VECTORS = 64
+
+
+def validate_per_date_limit(per_date_limit: int) -> int:
+    """Validate World's public grouped-search limit before any charged work begins."""
+    if (
+        not isinstance(per_date_limit, int)
+        or isinstance(per_date_limit, bool)
+        or not 1 <= per_date_limit <= 10_000
+    ):
+        raise ConfigurationError("per_date_limit must be an integer between 1 and 10,000")
+    return per_date_limit
 
 
 def validate_response_windows(
@@ -38,6 +51,7 @@ def validate_response_windows(
 ) -> List[Mapping[str, Any]]:
     """Require grouped-search chunks to cover the requested window without gaps or overlap."""
     cursor = start
+    archive_cutoff: Optional[dt.date] = None
     windows: List[Mapping[str, Any]] = []
     for response in responses:
         window = response.get("date_window")
@@ -55,12 +69,30 @@ def validate_response_windows(
             )
         if window_stop < window_start or window_stop > stop:
             raise ConfigurationError("World grouped response has an invalid effective window")
+        raw_cutoff = window.get("archive_cutoff")
+        if raw_cutoff is not None:
+            try:
+                response_cutoff = dt.date.fromisoformat(str(raw_cutoff))
+            except (TypeError, ValueError) as error:
+                raise ConfigurationError(
+                    "World grouped response has an invalid archive cutoff"
+                ) from error
+            if archive_cutoff is not None and response_cutoff < archive_cutoff:
+                raise ConfigurationError(
+                    "World grouped responses move the archive cutoff backwards"
+                )
+            if window_stop > response_cutoff:
+                raise ConfigurationError(
+                    "World grouped response extends beyond its archive cutoff"
+                )
+            archive_cutoff = response_cutoff
         windows.append(window)
         cursor = window_stop + dt.timedelta(days=1)
-    if cursor != stop + dt.timedelta(days=1):
+    effective_stop = min(stop, archive_cutoff) if archive_cutoff is not None else stop
+    if cursor != effective_stop + dt.timedelta(days=1):
         raise ConfigurationError(
             "World grouped responses do not cover the requested window through "
-            f"{stop.isoformat()}"
+            f"{effective_stop.isoformat()}"
         )
     return windows
 
@@ -108,6 +140,15 @@ class SemanticFactor:
             pole_hi=pole_hi,
             pole_lo=pole_lo
         )
+        if len(self.anchors) > MAX_RETRIEVAL_VECTORS:
+            raise ConfigurationError(
+                f"World accepts at most {MAX_RETRIEVAL_VECTORS} anchors per grouped search"
+            )
+        pole_vector_count = sum(len(high) + len(low) for high, low in self.poles)
+        if pole_vector_count > MAX_SCORE_VECTORS:
+            raise ConfigurationError(
+                f"World accepts at most {MAX_SCORE_VECTORS} pole statements per grouped search"
+            )
         if aggregate not in geometry.AGGREGATIONS:
             raise ConfigurationError(
                 f"aggregate must be one of {geometry.AGGREGATIONS}, got {aggregate!r}"
@@ -122,7 +163,14 @@ class SemanticFactor:
                 "softmax tail. Use an explicit cosine floor with those aggregations."
             )
         self.aggregate = aggregate
-        self.tanh_scale = float(tanh_scale)
+        if isinstance(tanh_scale, bool):
+            raise ConfigurationError("tanh_scale must be a finite positive number")
+        try:
+            self.tanh_scale = float(tanh_scale)
+        except (TypeError, ValueError) as error:
+            raise ConfigurationError("tanh_scale must be a finite positive number") from error
+        if not np.isfinite(self.tanh_scale) or self.tanh_scale <= 0:
+            raise ConfigurationError("tanh_scale must be a finite positive number")
 
         self.daily: Optional[pl.DataFrame] = None
         self.events: Optional[pl.DataFrame] = None
@@ -154,7 +202,7 @@ class SemanticFactor:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         embed_api_key: Optional[str] = None,
-        embed_base_url: str = embeddings.EMBED_BASE_URL,
+        embed_base_url: Optional[str] = None,
         cache_dir: Optional[str] = None,
         top_events: int = 5,
         per_date_limit: int = world_client.DEFAULT_PER_DATE_LIMIT
@@ -178,8 +226,8 @@ class SemanticFactor:
         :param api_key: NOSIBLE World API key with archive access.
         :param base_url: World deployment to build against, or None to read NOSIBLE_WORLD_URL.
         :param embed_api_key: OpenAI-compatible embedding key used to embed anchors and poles.
-        :param embed_base_url: OpenAI-compatible embedding API root. Use
-            ``https://openrouter.ai/api/v1`` for OpenRouter.
+        :param embed_base_url: Embedding provider root, or None to select OpenRouter for an
+            OpenRouter key and OpenAI otherwise.
         :param cache_dir: Cache root, or None for the default.
         :param top_events: Exemplar events to keep per period, for inspection and annotation.
         :param per_date_limit: Candidates retained per anchor and date; the measured default is
@@ -197,8 +245,9 @@ class SemanticFactor:
                 f"{sorted(weighting.WEIGHT_SCHEMES)}; custom callables cannot provide a correct "
                 "eligible-universe denominator."
             )
-        if per_date_limit <= 0 or per_date_limit > 10_000:
-            raise ConfigurationError("per_date_limit must be between 1 and 10,000")
+        if not isinstance(top_events, int) or isinstance(top_events, bool) or top_events < 0:
+            raise ConfigurationError("top_events must be a non-negative integer")
+        per_date_limit = validate_per_date_limit(per_date_limit=per_date_limit)
         start, stop = resolve_window(
             start_from=start_from,
             stop_at=stop_at
@@ -230,6 +279,9 @@ class SemanticFactor:
             stabilize=stabilize
         )
         self.events = exemplars
+        # A new successful series invalidates every regression derived from the old one.
+        self.stats = None
+        self.loadings = None
         self.diagnostics = {
             "name": self.name,
             "engine": "world_grouped_search",
@@ -264,7 +316,7 @@ class SemanticFactor:
     def prepare_vectors(
         self,
         embed_api_key: Optional[str],
-        embed_base_url: str,
+        embed_base_url: Optional[str],
         cache_dir: Optional[str]
     ) -> Tuple[np.ndarray, np.ndarray, List[Tuple[slice, slice]]]:
         """Embed the complete definition once and record the pole score-column layout."""
@@ -306,7 +358,7 @@ class SemanticFactor:
         eligible_events = 0
         represented_days = 0
         for index, date in enumerate(chosen, start=1):
-            responses = client.grouped_search(
+            responses = client._factor_grouped_search(
                 vectors=anchors,
                 start=date,
                 stop=date,
@@ -316,7 +368,10 @@ class SemanticFactor:
                 per_date_limit=per_date_limit
             )
             response = responses[0]
-            scores.extend(float(event["score"]) for event in response.get("events") or [])
+            scores.extend(
+                float(event["score"])
+                for event in world_client.factor_event_rows(response=response)
+            )
             groups = response.get("groups") or []
             represented_days += len(groups)
             eligible_events += sum(
@@ -334,7 +389,7 @@ class SemanticFactor:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         embed_api_key: Optional[str] = None,
-        embed_base_url: str = embeddings.EMBED_BASE_URL,
+        embed_base_url: Optional[str] = None,
         cache_dir: Optional[str] = None,
         per_date_limit: int = world_client.DEFAULT_PER_DATE_LIMIT
     ) -> pl.DataFrame:
@@ -344,6 +399,12 @@ class SemanticFactor:
         :return: One row per resolvable high quantile.
         """
         start, stop = resolve_window(start_from=start_from, stop_at=stop_at)
+        if self.aggregate != "max":
+            raise ConfigurationError(
+                "calibrate() requires aggregate='max'; per-anchor retrieval cannot recover "
+                "the exact mean or softmax tail"
+            )
+        per_date_limit = validate_per_date_limit(per_date_limit=per_date_limit)
         anchors, _, _ = self.prepare_vectors(
             embed_api_key=embed_api_key,
             embed_base_url=embed_base_url,
@@ -382,7 +443,7 @@ class SemanticFactor:
         weights: str,
         polarity_weighted: bool,
         embed_api_key: Optional[str],
-        embed_base_url: str,
+        embed_base_url: Optional[str],
         cache_dir: Optional[str],
         top_events: int,
         per_date_limit: int
@@ -418,7 +479,13 @@ class SemanticFactor:
             resolved_floor = float(self.floor)
         logs.info(message=f"relevance floor {self.floor!r} resolves to {resolved_floor:.4f}")
 
-        responses = client.grouped_search(
+        days: List[Dict[str, Any]] = []
+        exemplar_frames: List[pl.DataFrame] = []
+        window_responses: List[Dict[str, Any]] = []
+        world_requests = 0
+        candidate_events = 0
+        truncated_dates = 0
+        for response in client._factor_grouped_search_iter(
             vectors=anchors,
             score_vectors=pole_vectors,
             start=start,
@@ -426,52 +493,59 @@ class SemanticFactor:
             filters=self.filters,
             min_score=resolved_floor,
             aggregate=self.aggregate,
-            per_date_limit=per_date_limit
-        )
-        api_events = [
-            event
-            for response in responses
-            for event in response.get("events") or []
-        ]
-        records = [flatten_event(event=event) for event in api_events]
-        relevance = np.asarray(
-            a=[float(event.get("score") or 0.0) for event in api_events],
-            dtype=np.float32
-        )
-        polarity: Optional[np.ndarray] = None
-        if pole_slices and api_events:
-            pole_scores = np.asarray(
-                a=[event.get("score_vector_scores") or [] for event in api_events],
-                dtype=np.float32
+            per_date_limit=per_date_limit,
+        ):
+            world_requests += 1
+            candidate_events += int(response.get("candidate_events") or 0)
+            truncated_dates += int((response.get("stats") or {}).get("truncated_dates") or 0)
+            window_responses.append({"date_window": response.get("date_window")})
+            api_events = world_client.factor_event_rows(response=response)
+            records = [flatten_event(event=event) for event in api_events]
+            relevance = np.asarray(
+                a=[float(event.get("score") or 0.0) for event in api_events],
+                dtype=np.float32,
             )
-            if pole_scores.shape != (len(api_events), pole_vectors.shape[0]):
-                raise ConfigurationError(
-                    "World returned a malformed pole-score projection: expected "
-                    f"({len(api_events)}, {pole_vectors.shape[0]}), got {pole_scores.shape}"
+            polarity: Optional[np.ndarray] = None
+            if pole_slices and api_events:
+                pole_scores = np.asarray(
+                    a=[event.get("score_vector_scores") or [] for event in api_events],
+                    dtype=np.float32,
                 )
-            polarity = geometry.paired_polarity_from_scores(
-                scores=pole_scores,
-                pairs=pole_slices,
-                tanh_scale=self.tanh_scale
-            )
+                if pole_scores.shape != (len(api_events), pole_vectors.shape[0]):
+                    raise ConfigurationError(
+                        "World returned a malformed pole-score projection: expected "
+                        f"({len(api_events)}, {pole_vectors.shape[0]}), got {pole_scores.shape}"
+                    )
+                polarity = geometry.paired_polarity_from_scores(
+                    scores=pole_scores,
+                    pairs=pole_slices,
+                    tanh_scale=self.tanh_scale,
+                )
 
-        volume: Dict[str, float] = {}
-        eligible_counts: Dict[str, int] = {}
-        for response in responses:
+            volume: Dict[str, float] = {}
+            eligible_counts: Dict[str, int] = {}
             for group in response.get("groups") or []:
                 date = str(group.get("date") or "")
                 eligible = group.get("eligible") or {}
                 volume[date] = denominator_weight(eligible=eligible, weights=weights)
                 eligible_counts[date] = int(eligible.get("count") or 0)
-        days, exemplars = fold_records_into_days(
-            records=records,
-            relevance=relevance,
-            polarity=polarity,
-            weights=weights,
-            volume=volume,
-            eligible_counts=eligible_counts,
-            polarity_weighted=polarity_weighted,
-            top_events=top_events
+            chunk_days, chunk_exemplars = fold_records_into_days(
+                records=records,
+                relevance=relevance,
+                polarity=polarity,
+                weights=weights,
+                volume=volume,
+                eligible_counts=eligible_counts,
+                polarity_weighted=polarity_weighted,
+                top_events=top_events,
+            )
+            days.extend(chunk_days)
+            if chunk_exemplars is not None and not chunk_exemplars.is_empty():
+                exemplar_frames.append(chunk_exemplars)
+        exemplars = (
+            pl.concat(items=exemplar_frames).sort(by=["date", "weight"], descending=[False, True])
+            if exemplar_frames
+            else None
         )
         logs.warn(
             message=(
@@ -480,7 +554,7 @@ class SemanticFactor:
             )
         )
         date_windows = validate_response_windows(
-            responses=responses,
+            responses=window_responses,
             start=start,
             stop=stop
         )
@@ -489,7 +563,7 @@ class SemanticFactor:
             "exhaustive": False,
             "retrieval": "date_local_hnsw",
             "per_date_limit": per_date_limit,
-            "world_requests": len(responses),
+            "world_requests": world_requests,
             "effective_start": (
                 str(date_windows[0].get("from")) if date_windows else start.isoformat()
             ),
@@ -499,9 +573,9 @@ class SemanticFactor:
             "archive_cutoff": (
                 str(date_windows[-1].get("archive_cutoff")) if date_windows else None
             ),
-            "candidate_events": sum(
-                int(response.get("candidate_events") or 0) for response in responses
-            ),
+            "candidate_events": candidate_events,
+            "truncated_dates": truncated_dates,
+            "truncated": truncated_dates > 0,
             "volume_basis": "weight",
             "calibration_events": calibration_events,
             "calibration_days": calibration_days,
@@ -531,7 +605,8 @@ class SemanticFactor:
         title: Optional[str] = None,
         episodes: Optional[Dict[str, str]] = None,
         subtitle: str = "",
-        regimes: Optional[Sequence[Tuple[str, str]]] = None
+        regimes: Optional[Sequence[Tuple[str, str]]] = None,
+        means: Optional[Sequence[str]] = None,
     ) -> Any:
         """
         Draw the factor in the NOSIBLE house style.
@@ -546,6 +621,7 @@ class SemanticFactor:
             "YYYY-MM". Without them the chart marks its own largest peaks.
         :param subtitle: One line under the title saying what the factor is for.
         :param regimes: Date ranges to shade, as (start, stop) ISO pairs.
+        :param means: Which trailing means to draw, alone or together. Defaults to geometric.
         :return: The matplotlib figure.
         """
         from semantic_factors import plotting
@@ -560,7 +636,9 @@ class SemanticFactor:
             subtitle=subtitle,
             slug=self.name,
             regimes=regimes,
-            column="polarity" if show_polarity else "value"
+            column="polarity" if show_polarity else "value",
+            signed=show_polarity,
+            means=means,
         )
 
     def regress(

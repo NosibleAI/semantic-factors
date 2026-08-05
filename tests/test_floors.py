@@ -47,6 +47,17 @@ def test_an_absolute_floor_passes_straight_through() -> None:
     assert floors.resolve(floor=0.42, sample=np.zeros(shape=0, dtype=np.float32)) == 0.42
 
 
+def test_the_minimum_absolute_floor_is_accepted() -> None:
+    """Require the package boundary itself to remain a usable cosine floor."""
+    assert floors.validate(floor=0.30) == 0.30
+
+
+def test_absolute_floors_below_the_minimum_are_rejected() -> None:
+    """Reject noisy absolute floors rather than allowing an undocumented exception."""
+    with pytest.raises(ConfigurationError, match="at least 0.30"):
+        floors.validate(floor=0.2999)
+
+
 def test_a_quantile_without_a_sample_is_an_error() -> None:
     """
     Require an empty calibration sample to say so, rather than silently admitting everything.

@@ -5,7 +5,9 @@ and pole text must use the same model. The resulting vectors are sent to the gen
 search contract; the embedding provider never sees NOSIBLE World events. Any OpenAI-compatible
 embeddings endpoint works: pass ``base_url`` for Azure, OpenRouter, or a proxy.
 """
+import email.utils
 import os
+import random
 import time
 from typing import List, Optional
 
@@ -21,14 +23,25 @@ EMBED_MODEL = "text-embedding-3-large"
 #: Dimension World stores. The model supports truncation, but the events do not.
 EMBED_DIMS = 3072
 
-#: Default OpenAI-compatible endpoint.
+#: Default OpenAI-compatible endpoint for non-OpenRouter keys.
 EMBED_BASE_URL = "https://api.openai.com/v1"
+
+#: OpenRouter's OpenAI-compatible endpoint.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+#: OpenRouter requires the provider-qualified form of World's embedding model.
+OPENROUTER_EMBED_MODEL = "openai/text-embedding-3-large"
 
 #: Inputs per request. Large batches keep one response open for minutes; this stays under that.
 EMBED_BATCH = 32
 
 #: Environment variables consulted, in order, when no key is passed.
-EMBED_KEY_VARIABLES = ("SEMANTIC_FACTORS_EMBED_KEY", "OPENAI_API_KEY", "OR_API_KEY")
+EMBED_KEY_VARIABLES = (
+    "SEMANTIC_FACTORS_EMBED_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "OR_API_KEY"
+)
 
 MAX_ATTEMPTS = 5
 
@@ -36,7 +49,7 @@ MAX_ATTEMPTS = 5
 def embed_texts(
     texts: List[str],
     api_key: Optional[str] = None,
-    base_url: str = EMBED_BASE_URL,
+    base_url: Optional[str] = None,
     model: str = EMBED_MODEL,
     dims: int = EMBED_DIMS,
     cache_dir: Optional[str] = None
@@ -57,14 +70,16 @@ def embed_texts(
     """
     if not texts:
         raise EmbeddingError("at least one string is required")
+    resolved_base_url = resolve_embed_base_url(base_url=base_url, api_key=api_key)
+    resolved_model = resolve_embed_model(model=model, base_url=resolved_base_url)
     root = cache.resolve_cache_dir(cache_dir=cache_dir)
     path = cache.vector_cache_path(
         cache_dir=root,
         namespace="anchors",
         key=cache.digest(
             payload={
-                "base_url": base_url.rstrip("/"),
-                "model": model,
+                "base_url": resolved_base_url,
+                "model": resolved_model,
                 "dims": dims,
                 "texts": list(texts)
             }
@@ -75,7 +90,7 @@ def embed_texts(
         return cached[1]
 
     key = resolve_embed_key(api_key=api_key)
-    logs.info(message=f"embedding {len(texts)} strings with {model}")
+    logs.info(message=f"embedding {len(texts)} strings with {resolved_model}")
     vectors = np.zeros(shape=(len(texts), dims), dtype=np.float32)
     with requests.Session() as session:
         for start in range(0, len(texts), EMBED_BATCH):
@@ -84,8 +99,8 @@ def embed_texts(
                 session=session,
                 texts=batch,
                 api_key=key,
-                base_url=base_url,
-                model=model,
+                base_url=resolved_base_url,
+                model=resolved_model,
                 dims=dims
             )
     vectors = geometry.l2(matrix=vectors)
@@ -126,26 +141,55 @@ def embed_batch(
                 headers=headers,
                 timeout=(10, 120)
             )
-            if response.status_code == 401 or response.status_code == 403:
-                raise CredentialError(
-                    f"the embedding provider rejected the key ({response.status_code})"
-                )
-            if response.status_code == 429 or response.status_code >= 500:
-                raise EmbeddingError(f"provider returned {response.status_code}")
-            response.raise_for_status()
-            return parse_embeddings(
-                payload=response.json(),
-                expected=len(texts),
-                dims=dims
-            )
-        except CredentialError:
-            raise
-        except (requests.RequestException, EmbeddingError, KeyError, TypeError, ValueError) as error:
+        except requests.RequestException as error:
             if attempt == MAX_ATTEMPTS - 1:
                 raise EmbeddingError(f"embedding request failed: {error}") from error
             logs.info(message=f"embedding retry {attempt + 1}: {error}")
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(embedding_retry_delay(response=None, attempt=attempt))
+            continue
+
+        if response.status_code in (401, 403):
+            raise CredentialError(
+                f"the embedding provider rejected the key ({response.status_code})"
+            )
+        if response.status_code in (408, 425, 429) or response.status_code >= 500:
+            transient_error = EmbeddingError(f"provider returned {response.status_code}")
+            if attempt == MAX_ATTEMPTS - 1:
+                raise transient_error
+            logs.info(message=f"embedding retry {attempt + 1}: {transient_error}")
+            time.sleep(embedding_retry_delay(response=response, attempt=attempt))
+            continue
+        try:
+            response.raise_for_status()
+        except requests.RequestException as error:
+            raise EmbeddingError(f"embedding request failed: {error}") from error
+        try:
+            decoded = response.json()
+        except ValueError as error:
+            raise EmbeddingError("embedding provider returned invalid JSON") from error
+        return parse_embeddings(payload=decoded, expected=len(texts), dims=dims)
     raise EmbeddingError("embedding request exhausted its retries")
+
+
+def embedding_retry_delay(
+    response: Optional[requests.Response],
+    attempt: int,
+) -> float:
+    """Use bounded provider guidance plus jitter so concurrent workers spread out."""
+    base = 1.5 * (attempt + 1)
+    if response is not None:
+        raw = response.headers.get("Retry-After", "").strip()
+        try:
+            advised = float(raw)
+        except ValueError:
+            try:
+                parsed = email.utils.parsedate_to_datetime(raw)
+                advised = parsed.timestamp() - time.time() if parsed is not None else 0.0
+            except (OverflowError, TypeError, ValueError):
+                advised = 0.0
+        if advised > 0:
+            base = min(60.0, advised)
+    return min(60.0, base + random.uniform(0.0, 0.5))
 
 
 def parse_embeddings(payload: dict, expected: int, dims: int) -> np.ndarray:
@@ -198,3 +242,30 @@ def resolve_embed_key(api_key: Optional[str] = None) -> str:
         f"Pass embed_api_key=... or set one of {', '.join(EMBED_KEY_VARIABLES)}. "
         "The key is sent only to the configured embedding provider."
     )
+
+
+def resolve_embed_base_url(
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> str:
+    """Resolve the embedding endpoint, selecting OpenRouter for its key format."""
+    chosen = base_url or os.environ.get("SEMANTIC_FACTORS_EMBED_BASE_URL", "").strip()
+    if chosen:
+        return chosen.rstrip("/")
+    candidate = api_key
+    if not candidate:
+        for variable in EMBED_KEY_VARIABLES:
+            value = os.environ.get(variable, "").strip()
+            if value:
+                candidate = value
+                break
+    if candidate and candidate.startswith("sk-or-"):
+        return OPENROUTER_BASE_URL
+    return EMBED_BASE_URL
+
+
+def resolve_embed_model(model: str, base_url: str) -> str:
+    """Qualify only the default model when the selected provider is OpenRouter."""
+    if base_url.rstrip("/") == OPENROUTER_BASE_URL and model == EMBED_MODEL:
+        return OPENROUTER_EMBED_MODEL
+    return model

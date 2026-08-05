@@ -137,14 +137,17 @@ def align(
     :param daily: Daily factor frame.
     :param returns: Wide returns frame.
     :param column: Factor column to use.
-    :param difference: Difference the factor before joining.
+    :param difference: Difference the factor after aligning levels to trading dates.
     :return: Frame with date, factor and one column per ticker.
     """
     factor = daily.select("date", pl.col(column).alias("factor")).drop_nulls().sort(by="date")
-    if difference:
-        factor = factor.with_columns(pl.col("factor").diff().alias("factor")).drop_nulls()
     calendar = returns.sort(by="date")
-    return calendar.join_asof(other=factor, on="date", strategy="backward")
+    aligned = calendar.join_asof(other=factor, on="date", strategy="backward")
+    if difference:
+        aligned = aligned.with_columns(pl.col("factor").diff().alias("factor")).drop_nulls(
+            subset=["factor"]
+        )
+    return aligned
 
 
 def forward_returns(frame: pl.DataFrame, horizon: int) -> pl.DataFrame:

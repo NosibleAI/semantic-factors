@@ -25,7 +25,8 @@ class WorldApiError(SemanticFactorError):
         self,
         message: str,
         status: Optional[int] = None,
-        body: Optional[str] = None
+        body: Optional[str] = None,
+        retry_after: Optional[str] = None
     ) -> None:
         """
         Record the HTTP status and truncated body alongside the message.
@@ -33,11 +34,13 @@ class WorldApiError(SemanticFactorError):
         :param message: Human-readable description of the failure.
         :param status: HTTP status code, when one was received.
         :param body: Response body, truncated by the caller.
+        :param retry_after: Raw ``Retry-After`` guidance, when supplied by the server.
         :return: None.
         """
         super().__init__(message)
         self.status = status
         self.body = body
+        self.retry_after = retry_after
 
 
 class AccessDeniedError(WorldApiError):

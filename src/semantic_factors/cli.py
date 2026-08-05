@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from semantic_factors import filters as filter_rules
@@ -22,13 +23,15 @@ from semantic_factors.version import __version__
 from semantic_factors.weights import WEIGHT_SCHEMES
 
 #: Keys a spec file may carry that describe the factor rather than how to compute it.
-DEFINITION_KEYS = ("anchors", "pole_hi", "pole_lo", "filters", "name", "floor", "aggregate",
-                   "tanh_scale")
+DEFINITION_KEYS = (
+    "anchors", "poles", "pole_hi", "pole_lo", "filters", "name", "floor", "aggregate",
+    "tanh_scale"
+)
 
 #: Keys a spec file may carry that are passed straight to compute().
 COMPUTE_KEYS = ("weights", "residualize", "stabilize", "start_from", "stop_at", "api_key",
                 "base_url", "embed_api_key", "embed_base_url", "cache_dir", "top_events",
-                "per_date_limit")
+                "per_date_limit", "polarity_weighted")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -74,7 +77,7 @@ def run_compute(args: argparse.Namespace) -> int:
     factor.compute(**{key: spec[key] for key in COMPUTE_KEYS if key in spec})
 
     os.makedirs(name=args.out, exist_ok=True)
-    stem = os.path.join(args.out, factor.name)
+    stem = safe_output_stem(output_dir=args.out, factor_name=factor.name)
     factor.to_csv(path=f"{stem}_daily.csv")
     factor.monthly().write_csv(file=f"{stem}_monthly.csv")
     with open(f"{stem}_run.json", "w", encoding="utf-8") as handle:
@@ -88,6 +91,22 @@ def run_compute(args: argparse.Namespace) -> int:
         )
     print(f"wrote {stem}_daily.csv and its companions", flush=True)
     return 0
+
+
+def safe_output_stem(output_dir: str, factor_name: str) -> str:
+    """Keep a factor-controlled filename inside the caller's output directory."""
+    name = str(factor_name).strip()
+    if not name or name in {".", ".."} or Path(name).name != name:
+        raise SemanticFactorError(
+            "factor name must be a single filename, without an absolute path or parent traversal"
+        )
+    output = Path(output_dir).resolve()
+    candidate = (output / name).resolve()
+    try:
+        candidate.relative_to(output)
+    except ValueError as error:
+        raise SemanticFactorError("factor output path escaped --out") from error
+    return str(candidate)
 
 
 def write_chart(factor: SemanticFactor, path: str) -> None:

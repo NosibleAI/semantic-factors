@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2 — 2026-08-05
+
+- Correct the public release source to the reviewed package used by the NOSIBLE website build.
+- Promote the release-fix client, cache, filter, embedding-provider, return-data, and reliability
+  changes from the authoritative monorepo branch.
+- Make `plot()` match the website recipe out of the box: tanh display squash, a 30-day geometric
+  mean, and its 7-day rolling average as the single default trend.
+- Resolve OpenRouter endpoints and provider model names automatically, while retaining explicit
+  `embed_base_url` control.
+- Reject absolute cosine floors below 0.30 and expand API boundary tests.
+
 ## 0.1.1 — 2026-08-05
 
 - Add the documented `embed_base_url` argument to `compute()`, `calibrate()`, and CLI specs so
