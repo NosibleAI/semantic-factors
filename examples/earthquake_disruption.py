@@ -80,7 +80,7 @@ def main() -> None:
         embed_base_url=embed_base_url,
     )
     print("calibration", flush=True)
-    print(calibration, flush=True)
+    print(calibration.write_csv(), end="", flush=True)
 
     daily = FACTOR.compute(
         weights="materiality",
@@ -122,10 +122,22 @@ def main() -> None:
     print("\nrun diagnostics", flush=True)
     print(json.dumps(FACTOR.diagnostics, indent=2, sort_keys=True), flush=True)
     print("\nlargest monthly readings", flush=True)
-    print(FACTOR.monthly().sort(by="value", descending=True).head(12), flush=True)
-    print("\nlargest retained events", flush=True)
+    print(
+        FACTOR.monthly()
+        .drop_nulls(subset=["value"])
+        .sort(by="value", descending=True)
+        .head(12)
+        .write_csv(),
+        end="",
+        flush=True,
+    )
+    print("\nmost semantically relevant retained events", flush=True)
     if FACTOR.events is not None:
-        print(FACTOR.events.sort(by="weight", descending=True).head(12), flush=True)
+        print(
+            FACTOR.events.sort(by="score", descending=True).head(12).write_csv(),
+            end="",
+            flush=True,
+        )
     print(f"\nwrote {daily.height} daily rows to {csv_path}", flush=True)
     print(f"wrote plot to {plot_path}", flush=True)
 
