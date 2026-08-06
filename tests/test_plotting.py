@@ -249,6 +249,46 @@ def test_labels_are_spread_far_enough_apart_to_read() -> None:
             assert later - earlier >= plotting.LABEL_MIN_GAP - 1e-9
 
 
+def test_annotation_leaders_clip_raw_spikes_to_the_visible_axis() -> None:
+    """Require off-scale raw spikes and out-of-range dates to terminate at the chart edge."""
+    figure = plotting.plt.figure()
+    axis = figure.add_axes([0.1, 0.1, 0.8, 0.6])
+    left = float(plotting.matplotlib.dates.date2num(START))
+    right = float(plotting.matplotlib.dates.date2num(START + dt.timedelta(days=10)))
+    axis.set_xlim(left=left, right=right)
+    axis.set_ylim(bottom=0.0, top=10.0)
+
+    assert plotting.visible_target(
+        axis=axis, date=START - dt.timedelta(days=1), value=25.0
+    ) == pytest.approx((left, 10.0))
+    assert plotting.visible_target(
+        axis=axis, date=START + dt.timedelta(days=11), value=-5.0
+    ) == pytest.approx((right, 0.0))
+    assert plotting.visible_y(axis=axis, value=float("nan")) == pytest.approx(0.0)
+    plotting.plt.close(figure)
+
+
+def test_auto_annotations_require_event_headlines() -> None:
+    """Require automatic annotations to have event data to explain."""
+    daily = daily_from(values=[10.0] * 180)
+    figure = plotting.plot_factor(daily=daily, annotate=True, events=None)
+    assert not any(text.get_text() == START.isoformat() for text in figure.texts)
+    plotting.plt.close(figure)
+
+
+def test_auto_annotations_show_the_event_headline() -> None:
+    """Require an exemplar title to be rendered beneath its date."""
+    daily = daily_from(values=[10.0] * 180)
+    events = pl.DataFrame({
+        "date": [START],
+        "weight": [1.0],
+        "title": ["Factories close; prices rise"],
+    })
+    figure = plotting.plot_factor(daily=daily, annotate=True, events=events)
+    assert any(text.get_text() == "FACTORIES CLOSE; PRICES RISE" for text in figure.texts)
+    plotting.plt.close(figure)
+
+
 def test_peaks_are_labelled_once_per_episode() -> None:
     """
     Require nearby peaks to share one label, so an episode does not collect several.
