@@ -118,8 +118,8 @@ ANNOTATION_COUNT = 10
 #: Days that must separate two auto-picked peaks, so one episode does not collect several.
 ANNOTATION_SPACING_DAYS = 120
 
-#: Characters a label is truncated to.
-ANNOTATION_WIDTH = 46
+#: Characters a label is truncated to, keeping the two-row annotation band readable.
+ANNOTATION_WIDTH = 34
 
 #: Mean the displayed series is rebased to, so differently scaled factors read alike.
 REBASE_MEAN = 100.0
@@ -561,6 +561,13 @@ def draw_labels(
     :param trend_column: The trend the leaders should land on.
     :return: None.
     """
+    # A date without an event headline is not an explanation.  Explicit episode labels are
+    # still valid, but automatic annotations must be backed by the event exemplars returned by
+    # the factor computation.
+    if not episodes and (
+        events is None or events.is_empty() or "title" not in events.columns
+    ):
+        return
     marks = (
         episode_marks(episodes=episodes, frame=frame, trend_column=trend_column)
         if episodes
@@ -592,7 +599,8 @@ def draw_labels(
             target=(date, value)
         )
         axis.plot(
-            [float(matplotlib.dates.date2num(date))], [value],
+            [visible_target(axis=axis, date=date, value=value)[0]],
+            [visible_target(axis=axis, date=date, value=value)[1]],
             marker="o", markersize=2.6, markerfacecolor="none",
             markeredgecolor=BODY_GREY, markeredgewidth=0.6, zorder=5
         )
@@ -618,7 +626,9 @@ def label_positions(
     wanted = [
         float(
             figure.transFigure.inverted().transform(
-                axis.transData.transform((matplotlib.dates.date2num(date), 0.0))
+                axis.transData.transform(
+                    (visible_target(axis=axis, date=date, value=axis.get_ylim()[0])[0], axis.get_ylim()[0])
+                )
             )[0]
         )
         for date, _, _ in marks
@@ -657,7 +667,12 @@ def leader(
     :param target: The point on the series, in data coordinates.
     :return: None.
     """
-    point = (matplotlib.dates.date2num(target[0]), target[1])
+    visible_date, visible_value = visible_target(
+        axis=axis,
+        date=target[0],
+        value=target[1],
+    )
+    point = (visible_date, visible_value)
     corner = figure.transFigure.inverted().transform(axis.transData.transform(point))
     elbow_y = start[1] - (start[1] - corner[1]) * 0.45
     figure.add_artist(
@@ -670,6 +685,20 @@ def leader(
             solid_joinstyle="miter"
         )
     )
+
+
+def visible_y(axis: Any, value: float) -> float:
+    """Clamp a plotted value to the visible y-range of an axis."""
+    lower, upper = sorted(axis.get_ylim())
+    finite = float(value) if np.isfinite(value) else lower
+    return float(np.clip(finite, lower, upper))
+
+
+def visible_target(axis: Any, date: dt.date, value: float) -> Tuple[float, float]:
+    """Return a data point clipped to the visible rectangle of an axis."""
+    left, right = sorted(axis.get_xlim())
+    stamp = float(matplotlib.dates.date2num(date))
+    return float(np.clip(stamp, left, right)), visible_y(axis=axis, value=value)
 
 
 def episode_marks(
@@ -720,7 +749,9 @@ def peak_marks(
             break
         if any(abs((date - taken).days) < ANNOTATION_SPACING_DAYS for taken, _, _ in chosen):
             continue
-        chosen.append((date, float(value), titles.get(date, date.isoformat())))
+        title = titles.get(date)
+        if title:
+            chosen.append((date, float(value), str(title)))
     return sorted(chosen)
 
 

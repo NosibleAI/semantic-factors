@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 — 2026-08-06
+
+- Keep annotation guide wires and markers inside the visible chart rectangle, including when a
+  raw daily spike sits above the trend-based axis ceiling or an episode date is out of range.
+- Require automatic annotations to carry an event headline instead of rendering a meaningless
+  date-only label.
+- Shorten automatic headlines to keep the two annotation rows readable.
+
 ## 0.1.2 — 2026-08-05
 
 - Correct the public release source to the reviewed package used by the NOSIBLE website build.
